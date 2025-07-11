@@ -1,0 +1,8 @@
+streamlit
+PyPDF2
+python-docx
+pandas
+gTTS
+SpeechRecognition
+pydub
+openpyxl
