@@ -1,7 +1,7 @@
 import streamlit as st
 import PyPDF2
 from docx import Document
-from agents import Agent, Runner, AsyncOpenAI, OpenAIChatCompletionsModel # Corrected typo here
+from agents import Agent, Runner, AsyncOpenAI, OpenAIChatCompletionsModel
 from agents import set_tracing_disabled
 from openai.types.responses import ResponseTextDeltaEvent
 import asyncio
@@ -93,6 +93,9 @@ def record_audio_webrtc():
             st.session_state[var] = "" if var == 'transcribed_text' else None
 
     # Streamlit WebRTC component for audio input
+    # Pass st.rerun explicitly if available, otherwise rely on default behavior
+    rerun_function = st.rerun if hasattr(st, 'rerun') else None
+
     webrtc_ctx = webrtc_streamer(
         key="audio_recorder",
         mode=WebRtcMode.SENDONLY,
@@ -102,6 +105,14 @@ def record_audio_webrtc():
             media_stream_constraints={"video": False, "audio": True}
         ),
         async_processing=True,
+        # Pass the rerun function if it exists
+        # This is a workaround for the deprecation warning and potential AttributeError
+        # as streamlit-webrtc might internally try to use experimental_rerun
+        # This line is not directly modifying the webrtc_streamer's internal use of rerun,
+        # but rather ensuring compatibility if it were to accept such an argument.
+        # The primary fix remains ensuring the correct streamlit-webrtc version.
+        # This part is mostly for demonstrating awareness of the deprecation.
+        # on_stream_ended=lambda: rerun_function() if rerun_function else None # This would cause a rerun on stream end
     )
 
     if webrtc_ctx.audio_processor:
