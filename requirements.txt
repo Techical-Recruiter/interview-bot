@@ -1,8 +1,11 @@
 streamlit
 PyPDF2
 python-docx
+openai
 pandas
+python-dotenv
 gTTS
-SpeechRecognition
 pydub
-openpyxl
+SpeechRecognition
+nest_asyncio
+streamlit-webrtc==0.46.0
