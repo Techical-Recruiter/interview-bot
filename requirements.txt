@@ -7,5 +7,6 @@ python-dotenv
 gTTS
 pydub
 SpeechRecognition
+openai-agents
 nest_asyncio
 streamlit-webrtc==0.46.0
