@@ -1,7 +1,7 @@
 import streamlit as st
 import PyPDF2
 from docx import Document
-from agents import Agent, Runner, AsyncOpenAI, OpenAIChatChatCompletionsModel
+from agents import Agent, Runner, AsyncOpenAI, OpenAIChatCompletionsModel # Corrected typo here
 from agents import set_tracing_disabled
 from openai.types.responses import ResponseTextDeltaEvent
 import asyncio
