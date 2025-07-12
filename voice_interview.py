@@ -98,7 +98,7 @@ def record_audio_webrtc():
                 "iceServers": [
                     {"urls": ["stun:stun1.l.google.com:19302"]},
                     {"urls": ["stun:stun2.l.google.com:19302"]},
-                    {"urls": ["stun:stun3.l.google.com:19302"]}
+                    {"urls": ["turn:turn.anyfirewall.com:443?transport=tcp"], "username": "user", "credential": "pass"}  # Free TURN server
                 ],
                 "iceTransportPolicy": "all"
             },
@@ -106,11 +106,36 @@ def record_audio_webrtc():
             async_processing=True
         )
         if not webrtc_ctx.state.playing:
-            st.warning("WebRTC stream not active. Please ensure microphone access is granted and check your network connection.")
+            st.warning("WebRTC stream not active. Please ensure microphone access is granted, check your network, or try a different browser.")
             return ""
     except Exception as e:
-        st.error(f"WebRTC initialization failed: {str(e)}. This might be due to network issues or browser permissions.")
+        st.error(f"WebRTC initialization failed: {str(e)}. This might be due to network issues, browser permissions, or a deployment environment restriction.")
         return ""
+    
+    if webrtc_ctx.audio_processor:
+        if st.button("📝 Transcribe Recorded Audio"):
+            with st.spinner("Transcribing audio..."):
+                audio_data_bytes = webrtc_ctx.audio_processor.get_audio_data()
+                if audio_data_bytes:
+                    st.session_state.transcribed_text = transcribe_audio_bytes(audio_data_bytes)
+                    st.session_state.webrtc_audio_data = audio_data_bytes
+                    if st.session_state.transcribed_text and not st.session_state.transcribed_text.startswith(("Could not", "Speech recognition service error", "An unexpected error")):
+                        st.toast("Transcription complete!")
+                    else:
+                        st.error(st.session_state.transcribed_text)
+                else:
+                    st.warning("No audio recorded yet. Please start recording and speak.")
+    
+    if st.session_state.transcribed_text and not st.session_state.transcribed_text.startswith(("Could not", "Speech recognition service error", "An unexpected error")):
+        st.text_area("Transcribed Text", 
+                     value=st.session_state.transcribed_text, 
+                     height=150,
+                     key=f"transcribed_{st.session_state.current_question_index}")
+        
+        if st.session_state.webrtc_audio_data:
+            st.audio(st.session_state.webrtc_audio_data, format='audio/wav', start_time=0)
+    
+    return st.session_state.transcribed_text
     
     if webrtc_ctx.audio_processor:
         if st.button("📝 Transcribe Recorded Audio"):
