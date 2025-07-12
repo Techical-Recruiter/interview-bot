@@ -331,7 +331,7 @@ async def evaluate_answers(answers, jd, resume):
 
 def format_transcript_for_download(interview_data):
     candidate_name = interview_data.get("candidate_name", "N/A Candidate")
-    timestamp = interview transcript_data.get("timestamp", "N/A Date")
+    timestamp = interview_data.get("timestamp", "N/A Date")
     total_score = interview_data.get("total_score", "N/A")
     jd = interview_data.get("jd", "Not provided.")
     resume_text = interview_data.get("verification_text", "Not provided.")
