@@ -15,65 +15,62 @@ import nest_asyncio
 import datetime
 from gtts import gTTS
 import io
-import base64 
-# pydub is still useful for audio format conversions, but not directly for recording anymore
-from pydub import AudioSegment 
-# pyaudio is no longer used for recording, and its import is removed to prevent deployment issues.
+import base64
+from pydub import AudioSegment
 import speech_recognition as sr
 import logging
 from io import BytesIO
-
-# Import for client-side audio recording
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode, ClientSettings 
+from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 from typing import List, Union
+
+# Fix for experimental_rerun (workaround for older streamlit-webrtc versions)
+if not hasattr(st, 'experimental_rerun'):
+    st.experimental_rerun = st.rerun  # Redirect to st.rerun[](https://github.com/monarch-initiative/curategpt/issues/99)
 
 # Configure logging for better debugging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Apply nest_asyncio for running async functions in a synchronous environment like Streamlit
+# Apply nest_asyncio for running async functions in Streamlit Cloud
 nest_asyncio.apply()
-# Load environment variables from .env file
+
+# Load environment variables
 load_dotenv()
 
-# Retrieve API key and recruiter password from environment variables
+# Retrieve API key and recruiter password
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     st.error("GEMINI_API_KEY environment variable not set. Please set it in your .env file.")
 
-RECRUITER_PASSWORD = os.getenv("RECRUITER_PASSWORD", "admin123") # Default for local testing if not set
+RECRUITER_PASSWORD = os.getenv("RECRUITER_PASSWORD", "admin123")
 
-# --- Client-Side Audio Recording with streamlit-webrtc ---
-
-# A simple audio processor to buffer audio frames
+# --- Audio Processor for WebRTC ---
 class AudioBufferProcessor(AudioProcessorBase):
     def __init__(self):
         self.audio_chunks: List[bytes] = []
         self.start_time = time.time()
-
-    def recv(self, frame: bytes) -> bytes:
-        # Buffer the incoming audio frames
-        self.audio_chunks.append(frame)
-        return frame # Return the frame to continue the stream
-
+    
+    def recv(self, frame) -> bytes:
+        logging.info(f"Received audio frame: {len(frame)} bytes")
+        self.audio_chunks.append(frame.tobytes())  # Convert frame to bytes
+        return frame
+    
     def get_audio_data(self) -> bytes:
-        # Concatenate all buffered audio chunks
         return b"".join(self.audio_chunks)
 
 def transcribe_audio_bytes(audio_bytes: bytes) -> str:
     """Transcribes audio from bytes using Google Speech Recognition."""
+    logging.info(f"Received audio bytes length: {len(audio_bytes)}")
     r = sr.Recognizer()
     try:
-        # Convert bytes to a BytesIO object for speech_recognition
         audio_file = BytesIO(audio_bytes)
-        # Use AudioSegment to ensure it's in a format speech_recognition can handle
-        # Hardcode sample_width to 2 (for 16-bit audio, which is common)
-        audio = AudioSegment.from_raw(audio_file, sample_width=2, frame_rate=44100, channels=1) 
+        # Assume 16-bit, 44.1kHz, mono audio (common for WebRTC)
+        audio = AudioSegment.from_raw(audio_file, sample_width=2, frame_rate=44100, channels=1)
+        logging.info(f"AudioSegment: sample_width={audio.sample_width}, frame_rate={audio.frame_rate}, channels={audio.channels}")
         
-        # Export to WAV format in memory
         wav_file = BytesIO()
         audio.export(wav_file, format="wav")
-        wav_file.seek(0) # Rewind to the beginning
-
+        wav_file.seek(0)
+        
         with sr.AudioFile(wav_file) as source:
             audio_data = r.record(source)
             text = r.recognize_google(audio_data)
@@ -83,65 +80,60 @@ def transcribe_audio_bytes(audio_bytes: bytes) -> str:
     except sr.RequestError as e:
         return f"Speech recognition service error: {e}"
     except Exception as e:
+        logging.error(f"Transcription error: {str(e)}")
         return f"An unexpected error occurred during transcription: {e}"
 
 def record_audio_webrtc():
     """Streamlit UI for client-side audio recording using webrtc_streamer."""
-    # Ensure necessary session state variables are initialized
     for var in ['transcribed_text', 'webrtc_audio_data']:
         if var not in st.session_state:
             st.session_state[var] = "" if var == 'transcribed_text' else None
-
-    # Streamlit WebRTC component for audio input
-    # Pass st.rerun explicitly if available, otherwise rely on default behavior
-    rerun_function = st.rerun if hasattr(st, 'rerun') else None
-
-    webrtc_ctx = webrtc_streamer(
-        key="audio_recorder",
-        mode=WebRtcMode.SENDONLY,
-        audio_processor_factory=AudioBufferProcessor,
-        client_settings=ClientSettings(
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            media_stream_constraints={"video": False, "audio": True}
-        ),
-        async_processing=True,
-        # Pass the rerun function if it exists
-        # This is a workaround for the deprecation warning and potential AttributeError
-        # as streamlit-webrtc might internally try to use experimental_rerun
-        # This line is not directly modifying the webrtc_streamer's internal use of rerun,
-        # but rather ensuring compatibility if it were to accept such an argument.
-        # The primary fix remains ensuring the correct streamlit-webrtc version.
-        # This part is mostly for demonstrating awareness of the deprecation.
-        # on_stream_ended=lambda: rerun_function() if rerun_function else None # This would cause a rerun on stream end
-    )
-
+    
+    try:
+        webrtc_ctx = webrtc_streamer(
+            key="audio_recorder",
+            mode=WebRtcMode.SENDONLY,
+            audio_processor_factory=AudioBufferProcessor,
+            rtc_configuration={
+                "iceServers": [
+                    {"urls": ["stun:stun1.l.google.com:19302"]},
+                    {"urls": ["stun:stun2.l.google.com:19302"]}
+                ]
+            },
+            media_stream_constraints={"video": False, "audio": True},
+            async_processing=True
+        )
+        if not webrtc_ctx.state.playing:
+            st.warning("WebRTC stream not active. Ensure microphone access is granted.")
+            return ""
+    except Exception as e:
+        st.error(f"WebRTC error: {str(e)}")
+        return ""
+    
     if webrtc_ctx.audio_processor:
         if st.button("📝 Transcribe Recorded Audio"):
             with st.spinner("Transcribing audio..."):
                 audio_data_bytes = webrtc_ctx.audio_processor.get_audio_data()
                 if audio_data_bytes:
                     st.session_state.transcribed_text = transcribe_audio_bytes(audio_data_bytes)
-                    st.session_state.webrtc_audio_data = audio_data_bytes # Store for potential playback/download
+                    st.session_state.webrtc_audio_data = audio_data_bytes
                     if st.session_state.transcribed_text and not st.session_state.transcribed_text.startswith(("Could not", "Speech recognition service error", "An unexpected error")):
                         st.toast("Transcription complete!")
                     else:
-                        st.error(st.session_state.transcribed_text) # Display transcription error
+                        st.error(st.session_state.transcribed_text)
                 else:
                     st.warning("No audio recorded yet. Please start recording and speak.")
     
-    # Display transcribed text in a text area
     if st.session_state.transcribed_text and not st.session_state.transcribed_text.startswith(("Could not", "Speech recognition service error", "An unexpected error")):
         st.text_area("Transcribed Text", 
                      value=st.session_state.transcribed_text, 
                      height=150,
                      key=f"transcribed_{st.session_state.current_question_index}")
         
-        # Provide an option to play back the recorded audio
         if st.session_state.webrtc_audio_data:
             st.audio(st.session_state.webrtc_audio_data, format='audio/wav', start_time=0)
-
+    
     return st.session_state.transcribed_text
-
 
 def text_to_speech(text, lang='en'):
     """Converts text to speech using gTTS and returns audio bytes."""
@@ -149,7 +141,7 @@ def text_to_speech(text, lang='en'):
         tts = gTTS(text=text, lang=lang, slow=False)
         audio_bytes = io.BytesIO()
         tts.write_to_fp(audio_bytes)
-        audio_bytes.seek(0) # Rewind to the beginning of the stream
+        audio_bytes.seek(0)
         return audio_bytes
     except Exception as e:
         st.error(f"Error in text-to-speech conversion: {str(e)}. Ensure internet connectivity for gTTS.")
@@ -158,7 +150,7 @@ def text_to_speech(text, lang='en'):
 def autoplay_audio(audio_bytes):
     """Embeds an audio player that autoplays the provided audio bytes."""
     if audio_bytes:
-        audio_base64 = base64.b64encode(audio_bytes.read()).decode('utf-8') 
+        audio_base64 = base64.b64encode(audio_bytes.read()).decode('utf-8')
         audio_html = f"""
         <audio controls autoplay>
         <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
@@ -196,7 +188,7 @@ def load_shortlisted_candidates_from_excel(uploaded_file):
             return None
         if 'Job Description' not in df.columns:
             st.warning("Excel file does not contain a 'Job Description' column. Questions will be more general.")
-            df['Job Description'] = "" # Add column if missing to prevent KeyError
+            df['Job Description'] = ""
         return df
     except Exception as e:
         st.error(f"Error loading Excel file: {str(e)}")
@@ -208,7 +200,7 @@ def format_transcript_for_download(interview_data):
     timestamp = interview_data.get("timestamp", "N/A Date")
     total_score = interview_data.get("total_score", "N/A")
     jd = interview_data.get("jd", "Not provided.")
-    resume_text = interview_data.get("verification_text", "Not provided.") # Using verification_text for consistency with interview_data
+    resume_text = interview_data.get("verification_text", "Not provided.")
 
     transcript_lines = [
         f"--- AI Interview Transcript for {candidate_name} ---",
@@ -221,7 +213,7 @@ def format_transcript_for_download(interview_data):
         f"-------------------",
         f"\nCandidate's Resume/Verification Text (Excerpt):",
         f"-------------------",
-        f"{resume_text[:1000]}...", # Truncate resume text for brevity in transcript
+        f"{resume_text[:1000]}...",
         f"-------------------",
         f"\nDetailed Questions & Answers:"
     ]
@@ -241,17 +233,14 @@ def format_transcript_for_download(interview_data):
     return "\n".join(transcript_lines)
 
 async def generate_interview_questions(jd):
-    """
-    Generates interview questions using the Gemini API based on a job description.
-    Uses the 'agents' library for structured API interaction.
-    """
+    """Generates interview questions using the Gemini API."""
     try:
         provider = AsyncOpenAI(
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
             api_key=GEMINI_API_KEY
         )
         model = OpenAIChatCompletionsModel(model="gemini-1.5-flash", openai_client=provider)
-        set_tracing_disabled(disabled=True) # Disable tracing for cleaner output
+        set_tracing_disabled(disabled=True)
 
         agent = Agent(
             name="Question Generator",
@@ -280,7 +269,6 @@ async def generate_interview_questions(jd):
             if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                 full_response += event.data.delta
 
-        # Clean the response to ensure it's valid JSON
         json_string = full_response.strip().strip('```json').strip('```')
         response_json = json.loads(json_string)
         return response_json["questions"]
@@ -292,10 +280,7 @@ async def generate_interview_questions(jd):
         return ["Tell me about yourself.", "Describe your experience.", "Why are you interested in this role?"]
 
 async def conduct_interview(questions_answers, jd, resume_text):
-    """
-    Evaluates candidate's answers using the Gemini API, providing scores and feedback.
-    Uses the 'agents' library for structured API interaction.
-    """
+    """Evaluates candidate's answers using the Gemini API."""
     try:
         provider = AsyncOpenAI(
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -304,7 +289,6 @@ async def conduct_interview(questions_answers, jd, resume_text):
         model = OpenAIChatCompletionsModel(model="gemini-1.5-flash", openai_client=provider)
         set_tracing_disabled(disabled=True)
 
-        # Prepare the input for the agent including all Q&A pairs
         interview_input_str = "\n\n".join([f"Question: {qa['question']}\nAnswer: {qa['answer']}" for qa in questions_answers])
 
         agent = Agent(
@@ -349,12 +333,9 @@ async def conduct_interview(questions_answers, jd, resume_text):
             if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                 full_response += event.data.delta
 
-        # Clean the response to ensure it's valid JSON
         json_string = full_response.strip().strip('```json').strip('```')
         response_json = json.loads(json_string)
         
-        # Update the session state interview data with scores and feedback
-        # Iterate through the original questions_answers to ensure order and match
         for i, qa in enumerate(st.session_state.interview_data["qa"]):
             if i < len(response_json["questions"]):
                 ai_qa = response_json["questions"][i]
@@ -363,17 +344,15 @@ async def conduct_interview(questions_answers, jd, resume_text):
         
         st.session_state.interview_data["total_score"] = int(response_json.get("total_score", 0))
         
-        # Store the complete interview data for the recruiter dashboard
         st.session_state.interviews[st.session_state.interview_data["candidate_name"]] = {
             "timestamp": st.session_state.interview_data["timestamp"],
             "total_score": st.session_state.interview_data["total_score"],
             "qa": st.session_state.interview_data["qa"],
             "jd": st.session_state.interview_data["jd"],
-            "resume_text": st.session_state.interview_data["verification_text"] # Ensure this key is correct
+            "resume_text": st.session_state.interview_data["verification_text"]
         }
         st.session_state.interview_processed_successfully = True
         st.success("Interview evaluation complete!")
-
     except json.JSONDecodeError as e:
         st.error(f"Error decoding JSON from evaluation: {e}. Raw response: {full_response}")
         st.session_state.interview_started_processing = False
@@ -388,7 +367,7 @@ def recruiter_login_logic():
     st.subheader("🔑 Recruiter Login")
     password = st.text_input("Password", type="password", key="recruiter_password")
     if st.button("Login", key="recruiter_login_btn"):
-        if password == RECRUITER_PASSWORD: # Use the loaded RECRUITER_PASSWORD
+        if password == RECRUITER_PASSWORD:
             st.session_state.current_page = "recruiter_dashboard"
             st.session_state.authenticated = True
             st.rerun()
@@ -398,21 +377,20 @@ def recruiter_login_logic():
         st.session_state.current_page = "verification"
         st.rerun()
 
-# Initialize session state variables if they don't exist
-# This ensures the app state persists across reruns
+# Initialize session state variables
 for key, default_value in {
-    'current_page': "verification", # Current page of the application
-    'interview_data': {}, # Stores data for the current interview
-    'shortlisted_df': None, # DataFrame for shortlisted candidates
-    'interviews': {}, # Stores completed interview data for recruiter dashboard
-    'current_question_index': 0, # Index of the current question being asked
-    'interview_started_processing': False, # Flag to indicate if evaluation has started
-    'interview_processed_successfully': False, # Flag to indicate if evaluation completed successfully
-    'authenticated': False, # Recruiter authentication status
-    'dynamic_questions': [], # List of questions generated for the interview
-    'audio_question_played': False, # Flag to ensure audio question plays only once per question
-    'transcribed_text': "", # Transcribed text from audio
-    'webrtc_audio_data': None # Store raw audio bytes from webrtc
+    'current_page': "verification",
+    'interview_data': {},
+    'shortlisted_df': None,
+    'interviews': {},
+    'current_question_index': 0,
+    'interview_started_processing': False,
+    'interview_processed_successfully': False,
+    'authenticated': False,
+    'dynamic_questions': [],
+    'audio_question_played': False,
+    'transcribed_text': "",
+    'webrtc_audio_data': None
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
@@ -447,7 +425,6 @@ if st.session_state.current_page == "verification":
             elif st.session_state.shortlisted_df is None:
                 st.error("Shortlist not loaded. Please upload an Excel file with candidate names.")
             else:
-                # Check if the candidate's name exists in the loaded shortlist
                 candidate_row = st.session_state.shortlisted_df[st.session_state.shortlisted_df['Name'].str.strip().str.lower() == full_name.strip().lower()]
                 
                 if candidate_row.empty:
@@ -456,28 +433,25 @@ if st.session_state.current_page == "verification":
                     if uploaded_file:
                         verification_text = extract_text_from_document(uploaded_file)
                         if verification_text.strip():
-                            # Get job description for the specific candidate
                             candidate_jd = candidate_row['Job Description'].iloc[0] if 'Job Description' in candidate_row.columns and not candidate_row['Job Description'].empty else ""
                             
                             with st.spinner("Generating personalized interview questions..."):
                                 st.session_state.dynamic_questions = asyncio.run(generate_interview_questions(candidate_jd))
                             
                             if st.session_state.dynamic_questions:
-                                # Initialize interview data for the current session
                                 st.session_state.interview_data = {
                                     "candidate_name": full_name.strip(),
                                     "jd": candidate_jd.strip(),
                                     "verification_text": verification_text.strip(),
                                     "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "qa": [] # List to store question-answer pairs
+                                    "qa": []
                                 }
-                                # Transition to the interview page
                                 st.session_state.current_page = "interview"
                                 st.session_state.current_question_index = 0
-                                st.session_state.audio_question_played = False # Reset for the first question
-                                st.session_state.transcribed_text = "" # Clear previous transcription
-                                st.session_state.webrtc_audio_data = None # Clear previous webrtc audio
-                                st.rerun() # Rerun to display the interview page
+                                st.session_state.audio_question_played = False
+                                st.session_state.transcribed_text = ""
+                                st.session_state.webrtc_audio_data = None
+                                st.rerun()
                             else:
                                 st.error("Failed to generate interview questions. Please try again or check API key.")
                         else:
@@ -502,13 +476,11 @@ elif st.session_state.current_page == "interview":
         for i, qa in enumerate(data['qa'], 1):
             with st.expander(f"Question {i}: {qa['question']}"):
                 st.write(f"**Your Answer:** {qa['answer']}")
-                # Display audio if it was recorded and stored
-                if qa.get('audio_file_bytes'): # Check for the new key
+                if qa.get('audio_file_bytes'):
                     st.audio(qa['audio_file_bytes'], format='audio/wav')
                 st.write(f"**AI Score:** {qa.get('score', 'N/A')}/10")
                 st.write(f"**AI Feedback:** {qa.get('feedback', 'No feedback provided.')}")
         
-        # Button to download the full interview transcript
         transcript_content = format_transcript_for_download(data)
         st.download_button(
             label="Download Interview Transcript",
@@ -519,25 +491,22 @@ elif st.session_state.current_page == "interview":
         )
 
         if st.button("Finish Interview"):
-            # Reset all session state variables for a new interview
             st.session_state.current_page = "verification"
             st.session_state.current_question_index = 0
             st.session_state.interview_started_processing = False
             st.session_state.interview_processed_successfully = False
-            st.session_state.interview_data = {} 
+            st.session_state.interview_data = {}
             st.session_state.dynamic_questions = []
             st.session_state.audio_question_played = False
             st.session_state.transcribed_text = ""
-            st.session_state.webrtc_audio_data = None # Clear webrtc audio data
+            st.session_state.webrtc_audio_data = None
             st.rerun()
             
     else:
-        # Display current question if there are more questions
         if st.session_state.current_question_index < len(st.session_state.dynamic_questions):
-            question = st.session_state.dynamic_questions[st.session_state.current_question_index] 
+            question = st.session_state.dynamic_questions[st.session_state.current_question_index]
             st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.dynamic_questions)}")
             
-            # Play audio question only once per question
             if not st.session_state.audio_question_played:
                 audio = text_to_speech(question)
                 if audio:
@@ -548,16 +517,13 @@ elif st.session_state.current_page == "interview":
                 st.write(f"**{question}**")
             
             st.write("Record your answer below:")
-            # Use the new webrtc-based audio recording UI
-            transcription = record_audio_webrtc() 
+            transcription = record_audio_webrtc()
             
-            # Text area for typing answer, pre-filled with transcription if available
             text_answer = st.text_area("Or type your answer here:", 
                                        value=st.session_state.transcribed_text if st.session_state.transcribed_text and not st.session_state.transcribed_text.startswith(("Could not", "Speech recognition service error", "An unexpected error")) else "",
                                        height=150,
                                        key=f"text_ans_{st.session_state.current_question_index}")
             
-            # Determine the final answer (prioritize transcription if successful)
             final_answer = ""
             if transcription and not transcription.startswith(("Could not", "Speech recognition service error", "An unexpected error")):
                 final_answer = transcription
@@ -568,22 +534,18 @@ elif st.session_state.current_page == "interview":
                 if not final_answer.strip():
                     st.error("Please provide a valid answer either by recording or typing.")
                 else:
-                    # Append the question and answer to the interview data
                     st.session_state.interview_data['qa'].append({
                         "question": question,
                         "answer": final_answer.strip(),
-                        "audio_file_bytes": st.session_state.webrtc_audio_data # Store raw audio bytes
+                        "audio_file_bytes": st.session_state.webrtc_audio_data
                     })
                     
-                    # Move to the next question
                     st.session_state.current_question_index += 1
-                    st.session_state.audio_question_played = False # Reset for the next question
-                    st.session_state.transcribed_text = "" # Clear transcription for the next question
-                    st.session_state.webrtc_audio_data = None # Clear webrtc audio data for the next question
+                    st.session_state.audio_question_played = False
+                    st.session_state.transcribed_text = ""
+                    st.session_state.webrtc_audio_data = None
                     
-                    # Check if all questions have been answered
                     if st.session_state.current_question_index >= len(st.session_state.dynamic_questions):
-                        # All questions answered - trigger interview evaluation
                         st.session_state.interview_started_processing = True
                         with st.spinner("Evaluating your interview... This may take a moment."):
                             asyncio.run(conduct_interview(
@@ -591,11 +553,10 @@ elif st.session_state.current_page == "interview":
                                 st.session_state.interview_data['jd'],
                                 st.session_state.interview_data['verification_text']
                             ))
-                        st.rerun() # Rerun to display the results page
+                        st.rerun()
                     else:
-                        st.rerun() # Rerun to display the next question
+                        st.rerun()
         
-        # Display processing message if evaluation has started but not completed
         elif st.session_state.interview_started_processing and not st.session_state.interview_processed_successfully:
             st.info("Interview evaluation is in progress. Please wait...")
 
@@ -607,14 +568,13 @@ elif st.session_state.current_page == "recruiter_login":
 elif st.session_state.current_page == "recruiter_dashboard":
     if not st.session_state.authenticated:
         st.warning("Please log in to access the Recruiter Dashboard.")
-        recruiter_login_logic() # Redirect to login if not authenticated
+        recruiter_login_logic()
     else:
         st.header("📊 Recruiter Dashboard")
         
         if st.session_state.interviews:
             st.subheader("Completed Interviews")
             
-            # Convert interviews dictionary to a DataFrame for easier display and filtering
             interview_list = []
             for name, data in st.session_state.interviews.items():
                 interview_list.append({
@@ -628,7 +588,6 @@ elif st.session_state.current_page == "recruiter_dashboard":
             interviews_df = pd.DataFrame(interview_list)
             st.dataframe(interviews_df, use_container_width=True)
 
-            # Allow recruiter to select a candidate for detailed view
             selected_candidate = st.selectbox(
                 "Select a candidate to view detailed interview:",
                 options=[""] + list(st.session_state.interviews.keys()),
@@ -640,18 +599,16 @@ elif st.session_state.current_page == "recruiter_dashboard":
                 st.subheader(f"Detailed Interview for {selected_candidate}")
                 st.info(f"Overall Score: {data.get('total_score', 'N/A')}/30")
                 st.write(f"**Job Description:** {data.get('jd', 'Not provided.')}")
-                st.write(f"**Resume Excerpt:** {data.get('resume_text', 'Not provided.')[:500]}...") # Display a snippet of the resume
-
+                st.write(f"**Resume Excerpt:** {data.get('resume_text', 'Not provided.')[:500]}...")
+                
                 for i, qa in enumerate(data['qa'], 1):
                     with st.expander(f"Question {i}: {qa['question']}"):
                         st.write(f"**Candidate Answer:** {qa['answer']}")
-                        # Display audio if it was recorded and stored
                         if qa.get('audio_file_bytes'):
                             st.audio(qa['audio_file_bytes'], format='audio/wav')
                         st.write(f"**AI Score:** {qa.get('score', 'N/A')}/10")
                         st.write(f"**AI Feedback:** {qa.get('feedback', 'No feedback provided.')}")
                 
-                # Download transcript button for selected candidate
                 transcript_content = format_transcript_for_download(data)
                 st.download_button(
                     label=f"Download {selected_candidate} Transcript",
