@@ -10,4 +10,4 @@ SpeechRecognition
 nest_asyncio
 streamlit-webrtc==0.46.0
 openai-agents
-
+openpyxl
