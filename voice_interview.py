@@ -2,13 +2,14 @@ import streamlit as st
 from streamlit_mic_recorder import mic_recorder
 import os
 import io
+import uuid
 from gtts import gTTS
 import pygame
 import tempfile
 import google.generativeai as genai
 from dotenv import load_dotenv
 import speech_recognition as sr
-import uuid
+from pydub import AudioSegment
 
 # Load Gemini API Key
 load_dotenv()
@@ -18,13 +19,14 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 st.set_page_config(page_title="🎙 Voice Chatbot", layout="centered")
 st.title("🎙 Voice to Voice Chatbot using Gemini")
 
-# Save audio as .wav
+# Save audio bytes as proper WAV (via pydub)
 def save_audio_bytes_as_wav(audio_bytes):
+    audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-        f.write(audio_bytes)
+        audio_segment.export(f.name, format="wav")
         return f.name
 
-# Transcribe voice to text
+# Convert WAV to text
 def speech_to_text(audio_path):
     recognizer = sr.Recognizer()
     with sr.AudioFile(audio_path) as source:
@@ -36,13 +38,13 @@ def speech_to_text(audio_path):
     except sr.RequestError:
         return "Error connecting to recognition service."
 
-# Get response from Gemini
+# Chat with Gemini
 def chat_with_gemini(prompt):
     model = genai.GenerativeModel("gemini-pro")
     response = model.generate_content(prompt)
     return response.text
 
-# Speak bot reply
+# Speak response using gTTS + pygame
 def speak(text):
     tts = gTTS(text)
     filename = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mp3")
