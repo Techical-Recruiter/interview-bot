@@ -20,22 +20,27 @@ from pydub import AudioSegment
 import speech_recognition as sr
 import tempfile
 from streamlit_mic_recorder import mic_recorder
-from sqlalchemy import text
+from sqlalchemy import text # IMPORTANT: Added for SQL queries
 
-# Configure logging
+# Configure logging (optional but good for debugging)
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize nest_asyncio for asyncio compatibility in Streamlit
 nest_asyncio.apply()
 
-# Load environment variables
+# Load environment variables (for local testing, Streamlit Cloud uses secrets.toml directly)
 load_dotenv()
 
+# --- Retrieve API Keys and Passwords ---
+# In Streamlit Cloud, these will come from your secrets.toml
+# Locally, they will come from your .env file
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RECRUITER_PASSWORD = os.getenv("RECRUITER_PASSWORD")
 
 # --- Database Connection ---
+# Use the name you defined in secrets.toml under [connections.NAME]
+# Example: [connections.neon_db] in secrets.toml
 conn = st.connection("neon_db", type="sql")
 
 # --------- AUDIO RECORDING & TRANSCRIPTION ------------
@@ -427,9 +432,9 @@ for key, default_value in {
     'audio_question_played': False,
     'audio_bytes': None,
     'transcribed_text': "",
-    'timer_active': False,          # New: Is timer active?
-    'timer_start_time': None,       # New: When did timer start?
-    'answer_submitted_early': False # New: Did user submit before timeout?
+    'timer_active': False,
+    'timer_start_time': None,
+    'answer_submitted_early': False
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
@@ -496,9 +501,9 @@ if st.session_state.current_page == "verification":
                         st.session_state.audio_question_played = False
                         st.session_state.interview_processed_successfully = False
                         st.session_state.interview_started_processing = False
-                        st.session_state.timer_active = False # Reset timer state for new interview
-                        st.session_state.timer_start_time = None # Reset timer start time
-                        st.session_state.answer_submitted_early = False # Reset flag
+                        st.session_state.timer_active = False
+                        st.session_state.timer_start_time = None
+                        st.session_state.answer_submitted_early = False
                         st.rerun()
                     else:
                         st.error("Could not extract text from the provided resume file. Please check the file.")
@@ -521,8 +526,13 @@ elif st.session_state.current_page == "interview":
                     st.write(f"**Q:** {qa['question']}")
                     st.write(f"**A:** {qa['answer']}")
                     if qa.get('audio_bytes'):
-                        qa['audio_bytes'].seek(0)
-                        st.audio(qa['audio_bytes'], format="audio/wav")
+                        if isinstance(qa['audio_bytes'], io.BytesIO):
+                            qa['audio_bytes'].seek(0)
+                            st.audio(qa['audio_bytes'], format="audio/wav")
+                        elif isinstance(qa['audio_bytes'], bytes):
+                            st.audio(qa['audio_bytes'], format="audio/wav")
+                        else:
+                            st.info("Audio format not recognized for playback.")
                     st.markdown(f"**Feedback:** {qa.get('feedback', 'No feedback provided.')}")
         else:
             st.warning("Could not retrieve detailed interview results from database. Please check dashboard.")
@@ -537,9 +547,9 @@ elif st.session_state.current_page == "interview":
             st.session_state.audio_question_played = False
             st.session_state.audio_bytes = None
             st.session_state.transcribed_text = ""
-            st.session_state.timer_active = False # Reset timer state
-            st.session_state.timer_start_time = None # Reset timer start time
-            st.session_state.answer_submitted_early = False # Reset flag
+            st.session_state.timer_active = False
+            st.session_state.timer_start_time = None
+            st.session_state.answer_submitted_early = False
             st.rerun()
 
     else:
@@ -576,21 +586,19 @@ elif st.session_state.current_page == "interview":
             if not st.session_state.timer_active:
                 st.session_state.timer_active = True
                 st.session_state.timer_start_time = time.time()
-                st.session_state.answer_submitted_early = False # Reset for new question
+                st.session_state.answer_submitted_early = False
 
             time_elapsed = time.time() - st.session_state.timer_start_time
             remaining_time = MAX_TIME - int(time_elapsed)
 
             if remaining_time > 0 and not st.session_state.answer_submitted_early:
                 timer_placeholder.markdown(f"Time remaining: **{remaining_time} seconds** ⏰")
-                # Need to use time.sleep for the countdown to work in Streamlit's single-pass execution
                 time.sleep(1) 
-                # Re-run the app to update the timer
-                if not submit_button_clicked: # Only rerun if button not clicked yet
+                if not submit_button_clicked:
                     st.rerun()
             else:
-                st.session_state.timer_active = False # Timer finished
-                if not st.session_state.answer_submitted_early: # If timer ran out and not submitted
+                st.session_state.timer_active = False
+                if not st.session_state.answer_submitted_early:
                     timer_placeholder.error("Time's up! Moving to the next question.")
                     submit_button_clicked = True # Force submission as timeout
             # --- End Timer Logic ---
@@ -603,36 +611,37 @@ elif st.session_state.current_page == "interview":
                     # This means it's a timeout and the user didn't submit early
                     final_answer_to_submit = "TIMEOUT: No answer submitted within 1 minute."
                     st.session_state.audio_bytes = None # No audio for timeout
-                elif submit_button_clicked:
-                    # User clicked submit button
+                elif submit_button_clicked: # User clicked submit button
                     st.session_state.answer_submitted_early = True # Mark as submitted early
                     if not final_answer_to_submit:
                         st.warning("Please provide an answer either by speaking or typing.")
-                        # Do not move to next question if answer is empty
-                        # Keep timer active by not rerunning or resetting timer flags
-                        st.session_state.timer_active = True # Keep timer active if no answer given
-                        st.session_state.answer_submitted_early = False # Reset to false if no answer
-                        # Important: return here to prevent moving forward without an answer
-                        return
+                        st.session_state.timer_active = True
+                        st.session_state.timer_start_time = time.time() # Reset timer to give another minute
+                        st.session_state.answer_submitted_early = False # Reset flag
+                        st.rerun() # Rerun to display warning and restart timer
                 
-                # If we reach here, an answer (or timeout) is ready to be saved
-                audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
+                # If we are here, either an answer was provided, or it was a timeout.
+                # Only proceed to save if final_answer_to_submit is not empty after potential warning.
+                if final_answer_to_submit: # This covers actual answers AND the "TIMEOUT" string
+                    audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
+                    if final_answer_to_submit.startswith("TIMEOUT:"): # Specifically for timeout, ensure no audio
+                        audio_for_save = None
 
-                st.session_state.interview_data["qa"].append({
-                    "question": current_question,
-                    "answer": final_answer_to_submit,
-                    "audio_bytes": audio_for_save
-                })
-                # Reset audio and transcription state for the next question
-                st.session_state.audio_bytes = None
-                st.session_state.transcribed_text = ""
-                st.session_state.timer_active = False # Reset timer for next question
-                st.session_state.timer_start_time = None # Reset timer start time
-                st.session_state.answer_submitted_early = False # Reset flag for next question
+                    st.session_state.interview_data["qa"].append({
+                        "question": current_question,
+                        "answer": final_answer_to_submit,
+                        "audio_bytes": audio_for_save
+                    })
+                    # Reset audio and transcription state for the next question
+                    st.session_state.audio_bytes = None
+                    st.session_state.transcribed_text = ""
+                    st.session_state.timer_active = False # Reset timer for next question
+                    st.session_state.timer_start_time = None # Reset timer start time
+                    st.session_state.answer_submitted_early = False # Reset flag for next question
 
-                st.session_state.current_question_index += 1
-                st.session_state.audio_question_played = False
-                st.rerun()
+                    st.session_state.current_question_index += 1
+                    st.session_state.audio_question_played = False
+                    st.rerun()
 
         elif not st.session_state.interview_started_processing:
             st.info("All questions answered. Processing results and saving data. This may take a moment...")
@@ -679,7 +688,7 @@ elif st.session_state.current_page == "recruiter_dashboard":
                             st.markdown(f"**Candidate Answer:** {qa_item.get('answer', 'N/A')}")
                             if qa_item.get('audio_bytes'):
                                 if isinstance(qa_item['audio_bytes'], io.BytesIO):
-                                    qa_item['audio_bytes'].seek(0) # For BytesIO objects
+                                    qa_item['audio_bytes'].seek(0)
                                     st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
                                 elif isinstance(qa_item['audio_bytes'], bytes):
                                     st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
