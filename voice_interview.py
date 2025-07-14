@@ -557,12 +557,17 @@ elif st.session_state.current_page == "interview":
             current_question = st.session_state.dynamic_questions[st.session_state.current_question_index]
             st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.dynamic_questions)}")
             
+            # Play audio for the question only once
             if not st.session_state.audio_question_played:
                 audio_bytes_io = text_to_speech(current_question)
                 if audio_bytes_io:
                     st.write(f"**{current_question}**")
                     autoplay_audio(audio_bytes_io)
+                    # Add a short delay to allow audio to buffer and start playing
+                    time.sleep(2) # Important for audio playback
                 st.session_state.audio_question_played = True
+                # Rerun once here to immediately start the timer after audio has had a chance
+                st.rerun()
             else:
                 st.write(f"**{current_question}**")
             
@@ -583,6 +588,7 @@ elif st.session_state.current_page == "interview":
             timer_placeholder = st.empty()
             MAX_TIME = 60 # 1 minute
             
+            # Initialize timer if not active
             if not st.session_state.timer_active:
                 st.session_state.timer_active = True
                 st.session_state.timer_start_time = time.time()
@@ -593,12 +599,14 @@ elif st.session_state.current_page == "interview":
 
             if remaining_time > 0 and not st.session_state.answer_submitted_early:
                 timer_placeholder.markdown(f"Time remaining: **{remaining_time} seconds** ⏰")
+                # Sleep briefly to control the update rate of the timer display
                 time.sleep(1) 
+                # Rerun to update the timer every second, unless submit button was just clicked
                 if not submit_button_clicked:
                     st.rerun()
             else:
-                st.session_state.timer_active = False
-                if not st.session_state.answer_submitted_early:
+                st.session_state.timer_active = False # Timer finished
+                if not st.session_state.answer_submitted_early: # If timer ran out and not submitted
                     timer_placeholder.error("Time's up! Moving to the next question.")
                     submit_button_clicked = True # Force submission as timeout
             # --- End Timer Logic ---
@@ -611,17 +619,16 @@ elif st.session_state.current_page == "interview":
                     # This means it's a timeout and the user didn't submit early
                     final_answer_to_submit = "TIMEOUT: No answer submitted within 1 minute."
                     st.session_state.audio_bytes = None # No audio for timeout
-                elif submit_button_clicked: # User clicked submit button
+                elif submit_button_clicked: # User explicitly clicked submit button
                     st.session_state.answer_submitted_early = True # Mark as submitted early
-                    if not final_answer_to_submit:
+                    if not final_answer_to_submit: # If answer is empty after submitting
                         st.warning("Please provide an answer either by speaking or typing.")
-                        st.session_state.timer_active = True
+                        st.session_state.timer_active = True # Keep timer active
                         st.session_state.timer_start_time = time.time() # Reset timer to give another minute
-                        st.session_state.answer_submitted_early = False # Reset flag
+                        st.session_state.answer_submitted_early = False # Reset flag for another attempt
                         st.rerun() # Rerun to display warning and restart timer
                 
-                # If we are here, either an answer was provided, or it was a timeout.
-                # Only proceed to save if final_answer_to_submit is not empty after potential warning.
+                # If we are here, either a non-empty answer was provided, or it was a timeout.
                 if final_answer_to_submit: # This covers actual answers AND the "TIMEOUT" string
                     audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
                     if final_answer_to_submit.startswith("TIMEOUT:"): # Specifically for timeout, ensure no audio
@@ -662,6 +669,7 @@ elif st.session_state.current_page == "recruiter_dashboard":
     else:
         st.header("📊 Recruiter Dashboard")
         
+        # Always reload interviews from DB when accessing the dashboard to get the latest data
         st.session_state.interviews = load_interviews_from_db()
 
         if st.session_state.interviews:
