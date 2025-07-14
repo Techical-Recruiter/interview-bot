@@ -190,8 +190,9 @@ def save_interview_to_db(interview_data):
 
             # Insert into qa_details table for each Q&A
             for qa_item in interview_data.get("qa", []):
-                # Convert BytesIO audio object to raw bytes for storage in BYTEA column
-                audio_bytes_to_store = qa_item.get("audio_bytes").getvalue() if qa_item.get("audio_bytes") else None
+                # Fix for 'bytes' object has no attribute 'getvalue'
+                # st.session_state.audio_bytes is already bytes from mic_recorder
+                audio_bytes_to_store = qa_item.get("audio_bytes") if qa_item.get("audio_bytes") else None
                 session.execute(
                     text("""
                     INSERT INTO qa_details (interview_id, question, answer, score, feedback, audio_bytes)
@@ -597,7 +598,7 @@ elif st.session_state.current_page == "interview":
             # Text area for manual input or editing transcribed text
             answer = st.text_area(
                 "Or type your answer (This will override transcribed text if both are present):",
-                value=transcribed_text, # Initialize with transcribed text
+                value=st.session_state.transcribed_text, # Initialize with transcribed text
                 key=f"answer_manual_{st.session_state.current_question_index}"
             )
             
@@ -606,13 +607,13 @@ elif st.session_state.current_page == "interview":
 
             if st.button("Submit Answer", key=f"submit_answer_btn_{st.session_state.current_question_index}"):
                 if final_answer_to_submit:
-                    # Save the BytesIO object directly for now; it will be converted to bytes for DB storage
+                    # st.session_state.audio_bytes is already bytes, no .getvalue() needed
                     audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
 
                     st.session_state.interview_data["qa"].append({
                         "question": current_question,
                         "answer": final_answer_to_submit,
-                        "audio_bytes": audio_for_save # Store BytesIO object
+                        "audio_bytes": audio_for_save # Store raw bytes
                     })
                     # Reset audio and transcription state for the next question
                     st.session_state.audio_bytes = None
