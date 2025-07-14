@@ -3,6 +3,7 @@ streamlit-mic-recorder
 pydub
 speechrecognition
 gtts
+openpyxl
 python-docx
 PyPDF2
 pandas
