@@ -30,8 +30,11 @@ nest_asyncio.apply()
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+RECRUITER_PASSWORD = os.getenv("RECRUITER_PASSWORD") # Make sure this is also in your Streamlit secrets
 
-RECORDING_TEMP_FILE = "temp_recording.wav"  # temp file to save audio for transcription
+# --- Database Connection ---
+# Use the name you defined in secrets.toml under [connections.NAME]
+conn = st.connection("neon_db", type="sql")
 
 # --------- AUDIO RECORDING & TRANSCRIPTION USING streamlit_mic_recorder ------------
 
@@ -42,13 +45,11 @@ def save_audio_bytes_as_wav(audio_bytes):
         return f.name
 
 def record_audio():
-    # Initialize session state variables if missing
     if 'audio_bytes' not in st.session_state:
         st.session_state.audio_bytes = None
     if 'transcribed_text' not in st.session_state:
         st.session_state.transcribed_text = ""
 
-    # Streamlit mic recorder widget
     audio = mic_recorder(
         start_prompt="🎙️ Speak now",
         stop_prompt="🛑 Stop",
@@ -60,7 +61,6 @@ def record_audio():
         st.session_state.audio_bytes = audio["bytes"]
         st.audio(st.session_state.audio_bytes, format="audio/wav")
 
-        # Save audio bytes as WAV for transcription
         audio_path = save_audio_bytes_as_wav(st.session_state.audio_bytes)
         
         recognizer = sr.Recognizer()
@@ -73,7 +73,6 @@ def record_audio():
             except sr.RequestError:
                 st.session_state.transcribed_text = "Speech recognition service unavailable."
 
-    # Show editable transcription text area and return text
     if st.session_state.transcribed_text:
         return st.text_area(
             "Transcribed Text (You can edit if needed):", 
@@ -83,8 +82,6 @@ def record_audio():
         )
     else:
         return ""
-
-# --------- OTHER EXISTING FUNCTIONS (unchanged) ------------------------
 
 def text_to_speech(text, lang='en'):
     try:
@@ -98,6 +95,8 @@ def text_to_speech(text, lang='en'):
         return None
     
 def autoplay_audio(audio_bytes):
+    # Ensure audio_bytes is at the beginning before reading
+    audio_bytes.seek(0) 
     audio_base64 = base64.b64encode(audio_bytes.read()).decode('utf-8')
     audio_html = f"""
     <audio controls autoplay>
@@ -140,12 +139,102 @@ def load_shortlisted_candidates_from_excel(uploaded_file):
         st.error(f"Error loading Excel file: {str(e)}")
         return None
 
+# --- NEW: Functions to interact with the database ---
+def save_interview_to_db(interview_data):
+    try:
+        with conn.session as session:
+            # Insert into interviews table
+            result = session.execute(
+                """
+                INSERT INTO interviews (candidate_name, interview_timestamp, total_score, job_description, resume_text)
+                VALUES (:candidate_name, :interview_timestamp, :total_score, :job_description, :resume_text)
+                RETURNING id;
+                """,
+                params={
+                    "candidate_name": interview_data["candidate_name"],
+                    "interview_timestamp": interview_data["timestamp"],
+                    "total_score": interview_data["total_score"],
+                    "job_description": interview_data["jd"],
+                    "resume_text": interview_data["verification_text"]
+                }
+            )
+            interview_id = result.scalar_one() # Get the ID of the newly inserted interview
+
+            # Insert into qa_details table for each Q&A
+            for qa_item in interview_data.get("qa", []):
+                audio_bytes_to_store = qa_item.get("audio_bytes").getvalue() if qa_item.get("audio_bytes") else None
+                session.execute(
+                    """
+                    INSERT INTO qa_details (interview_id, question, answer, score, feedback, audio_bytes)
+                    VALUES (:interview_id, :question, :answer, :score, :feedback, :audio_bytes)
+                    """,
+                    params={
+                        "interview_id": interview_id,
+                        "question": qa_item["question"],
+                        "answer": qa_item["answer"],
+                        "score": qa_item.get("score"),
+                        "feedback": qa_item.get("feedback"),
+                        "audio_bytes": audio_bytes_to_store # Store as bytes
+                    }
+                )
+            session.commit()
+        st.success("Interview data saved successfully to database!")
+    except Exception as e:
+        st.error(f"Error saving interview data to database: {str(e)}")
+        logging.error(f"Database save error: {e}")
+
+
+def load_interviews_from_db():
+    interviews = {}
+    try:
+        with conn.session as session:
+            # Fetch all main interview records
+            main_interviews_result = session.execute("SELECT * FROM interviews;").fetchall()
+            
+            for row in main_interviews_result:
+                # Convert row to dict for easier access
+                interview_dict = {
+                    "id": row[0], # Assuming id is the first column
+                    "candidate_name": row[1],
+                    "timestamp": row[2].strftime("%Y-%m-%d %H:%M:%S") if row[2] else None, # Format datetime
+                    "total_score": row[3],
+                    "jd": row[4],
+                    "resume_text": row[5]
+                }
+                
+                # Fetch Q&A details for this interview
+                qa_details_result = session.execute(
+                    f"SELECT question, answer, score, feedback, audio_bytes FROM qa_details WHERE interview_id = {interview_dict['id']};"
+                ).fetchall()
+                
+                qa_list = []
+                for qa_row in qa_details_result:
+                    qa_dict = {
+                        "question": qa_row[0],
+                        "answer": qa_row[1],
+                        "score": qa_row[2],
+                        "feedback": qa_row[3],
+                        # Convert bytes back to BytesIO for Streamlit audio playback
+                        "audio_bytes": io.BytesIO(qa_row[4]) if qa_row[4] else None
+                    }
+                    qa_list.append(qa_dict)
+                
+                interview_dict["qa"] = qa_list
+                interviews[interview_dict["candidate_name"]] = interview_dict
+    except Exception as e:
+        st.error(f"Error loading interview data from database: {str(e)}")
+        logging.error(f"Database load error: {e}")
+    return interviews
+
+# --- End of NEW database functions ---
+
+
 def format_transcript_for_download(interview_data):
     candidate_name = interview_data.get("candidate_name", "N/A Candidate")
     timestamp = interview_data.get("timestamp", "N/A Date")
     total_score = interview_data.get("total_score", "N/A")
     jd = interview_data.get("jd", "Not provided.")
-    resume_text = interview_data.get("verification_text", "Not provided.")
+    resume_text = interview_data.get("resume_text", "Not provided.") # Changed from verification_text
 
     transcript_lines = [
         f"--- AI Interview Transcript for {candidate_name} ---",
@@ -215,6 +304,7 @@ async def generate_interview_questions(jd):
         return response_json["questions"]
     except Exception as e:
         st.error(f"Error generating questions: {str(e)}")
+        logging.error(f"Question generation error: {e}")
         return ["Tell me about yourself.", "Describe your experience.", "Why are you interested in this role?"]
 
 async def conduct_interview(questions, resume_text):
@@ -272,16 +362,18 @@ async def conduct_interview(questions, resume_text):
                 qa["feedback"] = ai_qa.get("feedback", "No feedback")
         
         st.session_state.interview_data["total_score"] = int(response_json.get("total_score", 0))
-        st.session_state.interviews[st.session_state.interview_data["candidate_name"]] = {
-            "timestamp": st.session_state.interview_data["timestamp"],
-            "score": st.session_state.interview_data["total_score"],
-            "qa": st.session_state.interview_data["qa"],
-            "jd": st.session_state.interview_data["jd"],
-            "resume_text": st.session_state.interview_data["verification_text"]
-        }
+        
+        # --- Critical Change: Save to DB here instead of just session_state.interviews ---
+        save_interview_to_db(st.session_state.interview_data)
+        # --- End Critical Change ---
+
         st.session_state.interview_processed_successfully = True
+        # After saving, reload interviews from DB to ensure session state reflects new data
+        st.session_state.interviews = load_interviews_from_db()
+
     except Exception as e:
         st.error(f"Error in evaluation: {str(e)}")
+        logging.error(f"Evaluation error: {e}")
         st.session_state.interview_started_processing = False
         st.session_state.interview_processed_successfully = False
 
@@ -289,7 +381,7 @@ def recruiter_login_logic():
     st.subheader("🔑 Recruiter Login")
     password = st.text_input("Password", type="password", key="recruiter_password")
     if st.button("Login", key="recruiter_login_btn"):
-        if password == os.getenv("RECRUITER_PASSWORD"):
+        if password == RECRUITER_PASSWORD: # Using RECRUITER_PASSWORD from env
             st.session_state.current_page = "recruiter_dashboard"
             st.session_state.authenticated = True
             st.rerun()
@@ -302,7 +394,7 @@ for key, default_value in {
     'current_page': "verification",
     'interview_data': {},
     'shortlisted_df': None,
-    'interviews': {},
+    'interviews': {}, # This will be populated from DB on app start/rerun
     'current_question_index': 0,
     'interview_started_processing': False,
     'interview_processed_successfully': False,
@@ -314,6 +406,12 @@ for key, default_value in {
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
+
+# --- Initial load of interviews from DB when app starts or refreshes ---
+# This ensures that 'interviews' in session state always reflects the database content
+if 'interviews' not in st.session_state or not st.session_state.interviews: # Load only if not loaded or empty
+    st.session_state.interviews = load_interviews_from_db()
+
 
 # --------- MAIN APP LOGIC ------------
 
@@ -337,7 +435,6 @@ if st.session_state.current_page == "verification":
             st.dataframe(st.session_state.shortlisted_df.head())
 
     st.markdown("---")
-    # Add a button to navigate to the recruiter login page
     if st.button("Recruiter Login"):
         st.session_state.current_page = "recruiter_login"
         st.rerun()
@@ -392,17 +489,24 @@ elif st.session_state.current_page == "interview":
         st.subheader("✅ Interview Completed")
         st.markdown(f"**Score:** {st.session_state.interview_data['total_score']}/30")
         
-        for i, qa in enumerate(st.session_state.interview_data["qa"], 1):
+        # Display feedback from the database (via reloaded session state)
+        # Ensure we are looking at the current candidate's data from the loaded interviews
+        current_candidate_interview_data = st.session_state.interviews.get(candidate_name, {})
+        for i, qa in enumerate(current_candidate_interview_data.get("qa", []), 1):
             with st.expander(f"Question {i}"):
                 st.write(f"**Q:** {qa['question']}")
                 st.write(f"**A:** {qa['answer']}")
                 if qa.get('audio_bytes'):
+                    # Seek to start for playback
+                    qa['audio_bytes'].seek(0)
                     st.audio(qa['audio_bytes'], format="audio/wav")
                 st.markdown(f"**Score:** {qa.get('score', 'N/A')}/10")
                 st.markdown(f"**Feedback:** {qa.get('feedback', 'None')}")
 
         if st.button("Back to Start"):
             st.session_state.current_page = "verification"
+            # Clear current interview data for the next candidate
+            st.session_state.interview_data = {}
             st.rerun()
 
     else:
@@ -428,7 +532,7 @@ elif st.session_state.current_page == "interview":
 
             if st.button("Submit Answer"):
                 if final_answer.strip():
-                    # Save audio bytes separately for playback if available
+                    # Save BytesIO object directly for now, will convert to bytes for DB
                     audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
 
                     st.session_state.interview_data["qa"].append({
@@ -449,6 +553,7 @@ elif st.session_state.current_page == "interview":
         elif not st.session_state.interview_started_processing:
             st.info("All questions answered. Processing results...")
             st.session_state.interview_started_processing = True
+            # The conduct_interview function will now save to DB
             asyncio.run(conduct_interview(st.session_state.dynamic_questions, st.session_state.interview_data["verification_text"]))
             st.rerun()
 
@@ -460,31 +565,38 @@ elif st.session_state.current_page == "recruiter_login":
 
 elif st.session_state.current_page == "recruiter_dashboard":
     if not st.session_state.authenticated:
-        # If somehow they land here without authentication, redirect to login
         st.session_state.current_page = "recruiter_login"
         st.rerun()
     else:
         st.header("📊 Recruiter Dashboard")
         
+        # Ensure interviews are always reloaded fresh for the dashboard
+        st.session_state.interviews = load_interviews_from_db()
+
         if st.session_state.interviews:
             st.subheader("Completed Interviews")
             for candidate, data in st.session_state.interviews.items():
-                with st.expander(f"{candidate} - {data['score']}/30"):
+                with st.expander(f"{candidate} - {data['total_score']}/30 - {data['timestamp']}"): # Changed score key
                     st.write(f"Date: {data['timestamp']}")
-                    # Display original audio if available (only in dashboard)
+                    st.write(f"Job Description (Excerpt): {data['jd'][:200]}...")
+                    st.write(f"Resume Text (Excerpt): {data['resume_text'][:200]}...")
+
                     if data.get('qa'):
                         for i, qa_item in enumerate(data['qa']):
+                            st.markdown(f"**Question {i+1}:** {qa_item['question']}")
+                            st.markdown(f"**Answer:** {qa_item['answer']}")
                             if qa_item.get('audio_bytes'):
-                                st.write(f"**Q{i+1}:** {qa_item['question']}")
-                                st.write(f"**A{i+1}:** {qa_item['answer']}")
-                                st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
-                            else:
-                                st.write(f"**Q{i+1}:** {qa_item['question']}")
-                                st.write(f"**A{i+1}:** {qa_item['answer']}")
+                                # BytesIO object needs to be reset for playback in Streamlit's audio widget
+                                qa_item['audio_bytes'].seek(0)
+                                st.audio(qa_item['audio_bytes'], format="audio/wav")
+                            st.markdown(f"**Score:** {qa_item.get('score', 'N/A')}/10")
+                            st.markdown(f"**Feedback:** {qa_item.get('feedback', 'None')}")
+                            st.markdown("---") # Separator for Q&A pairs
+                    
                     st.download_button(
                         label="Download Transcript",
                         data=format_transcript_for_download(data),
-                        file_name=f"{candidate}_interview.txt"
+                        file_name=f"{candidate}_interview_{data['timestamp'].replace(':', '-')}.txt"
                     )
         else:
             st.info("No interviews completed yet")
