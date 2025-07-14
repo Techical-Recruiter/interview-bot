@@ -337,6 +337,11 @@ if st.session_state.current_page == "verification":
             st.dataframe(st.session_state.shortlisted_df.head())
 
     st.markdown("---")
+    # Add a button to navigate to the recruiter login page
+    if st.button("Recruiter Login"):
+        st.session_state.current_page = "recruiter_login"
+        st.rerun()
+
     if st.button("Start Interview", type="primary"):
         if not full_name.strip():
             st.error("Please provide your name")
@@ -447,9 +452,17 @@ elif st.session_state.current_page == "interview":
             asyncio.run(conduct_interview(st.session_state.dynamic_questions, st.session_state.interview_data["verification_text"]))
             st.rerun()
 
+elif st.session_state.current_page == "recruiter_login":
+    recruiter_login_logic()
+    if st.button("Back to Candidate Verification"):
+        st.session_state.current_page = "verification"
+        st.rerun()
+
 elif st.session_state.current_page == "recruiter_dashboard":
     if not st.session_state.authenticated:
-        recruiter_login_logic()
+        # If somehow they land here without authentication, redirect to login
+        st.session_state.current_page = "recruiter_login"
+        st.rerun()
     else:
         st.header("📊 Recruiter Dashboard")
         
@@ -458,6 +471,16 @@ elif st.session_state.current_page == "recruiter_dashboard":
             for candidate, data in st.session_state.interviews.items():
                 with st.expander(f"{candidate} - {data['score']}/30"):
                     st.write(f"Date: {data['timestamp']}")
+                    # Display original audio if available (only in dashboard)
+                    if data.get('qa'):
+                        for i, qa_item in enumerate(data['qa']):
+                            if qa_item.get('audio_bytes'):
+                                st.write(f"**Q{i+1}:** {qa_item['question']}")
+                                st.write(f"**A{i+1}:** {qa_item['answer']}")
+                                st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
+                            else:
+                                st.write(f"**Q{i+1}:** {qa_item['question']}")
+                                st.write(f"**A{i+1}:** {qa_item['answer']}")
                     st.download_button(
                         label="Download Transcript",
                         data=format_transcript_for_download(data),
