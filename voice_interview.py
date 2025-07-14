@@ -40,7 +40,7 @@ def speech_to_text(audio_path):
 
 # Chat with Gemini
 def chat_with_gemini(prompt):
-    model = genai.GenerativeModel("gemini-pro")
+    model = genai.GenerativeModel("gemini-2.0-flash")
     response = model.generate_content(prompt)
     return response.text
 
