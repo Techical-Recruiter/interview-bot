@@ -1,6 +1,7 @@
 streamlit
 streamlit-mic-recorder
-pydub speechrecognition
+pydub
+speechrecognition
 gtts
 python-docx
 PyPDF2
