@@ -20,30 +20,25 @@ from pydub import AudioSegment
 import speech_recognition as sr
 import tempfile
 from streamlit_mic_recorder import mic_recorder
-from sqlalchemy import text # IMPORTANT: Added for SQL queries
+from sqlalchemy import text
 
-# Configure logging (optional but good for debugging)
+# Configure logging
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Initialize nest_asyncio for asyncio compatibility in Streamlit
 nest_asyncio.apply()
 
-# Load environment variables (for local testing, Streamlit Cloud uses secrets.toml directly)
+# Load environment variables
 load_dotenv()
 
-# --- Retrieve API Keys and Passwords ---
-# In Streamlit Cloud, these will come from your secrets.toml
-# Locally, they will come from your .env file
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RECRUITER_PASSWORD = os.getenv("RECRUITER_PASSWORD")
 
 # --- Database Connection ---
-# Use the name you defined in secrets.toml under [connections.NAME]
-# Example: [connections.neon_db] in secrets.toml
 conn = st.connection("neon_db", type="sql")
 
-# --------- AUDIO RECORDING & TRANSCRIPTION USING streamlit_mic_recorder ------------
+# --------- AUDIO RECORDING & TRANSCRIPTION ------------
 
 def save_audio_bytes_as_wav(audio_bytes):
     """Saves raw audio bytes to a temporary WAV file for speech recognition."""
@@ -59,13 +54,11 @@ def save_audio_bytes_as_wav(audio_bytes):
 
 def record_audio():
     """Records audio from microphone and transcribes it."""
-    # Initialize session state variables if they don't exist
     if 'audio_bytes' not in st.session_state:
         st.session_state.audio_bytes = None
     if 'transcribed_text' not in st.session_state:
         st.session_state.transcribed_text = ""
 
-    # Display the microphone recorder widget
     audio = mic_recorder(
         start_prompt="🎙️ Speak now",
         stop_prompt="🛑 Stop",
@@ -74,7 +67,7 @@ def record_audio():
     )
 
     if audio:
-        st.session_state.audio_bytes = audio["bytes"] # Store raw bytes
+        st.session_state.audio_bytes = audio["bytes"]
         st.audio(st.session_state.audio_bytes, format="audio/wav")
 
         audio_path = save_audio_bytes_as_wav(st.session_state.audio_bytes)
@@ -89,11 +82,9 @@ def record_audio():
                     st.session_state.transcribed_text = "Sorry, I couldn't understand that."
                 except sr.RequestError as e:
                     st.session_state.transcribed_text = f"Speech recognition service unavailable: {e}"
-            # Clean up the temporary file
-            os.unlink(audio_path)
+            os.unlink(audio_path) # Clean up the temporary file
 
     if st.session_state.transcribed_text:
-        # Display transcribed text in a text area, allowing user edits
         return st.text_area(
             "Transcribed Text (You can edit if needed):", 
             value=st.session_state.transcribed_text,
@@ -109,7 +100,7 @@ def text_to_speech(text_to_convert, lang='en'):
         tts = gTTS(text=text_to_convert, lang=lang, slow=False)
         audio_bytes_io = io.BytesIO()
         tts.write_to_fp(audio_bytes_io)
-        audio_bytes_io.seek(0) # Rewind the BytesIO object to the beginning
+        audio_bytes_io.seek(0)
         return audio_bytes_io
     except Exception as e:
         st.error(f"Error in text-to-speech conversion: {str(e)}")
@@ -118,7 +109,6 @@ def text_to_speech(text_to_convert, lang='en'):
     
 def autoplay_audio(audio_bytes_io):
     """Plays audio automatically using HTML."""
-    # Ensure audio_bytes_io is at the beginning before reading
     audio_bytes_io.seek(0) 
     audio_base64 = base64.b64encode(audio_bytes_io.read()).decode('utf-8')
     audio_html = f"""
@@ -166,18 +156,17 @@ def load_shortlisted_candidates_from_excel(uploaded_file):
         logging.error(f"Excel load error: {e}")
         return None
 
-# --- NEW: Functions to interact with the database ---
+# --- Database Functions ---
 def save_interview_to_db(interview_data):
     """Saves a completed interview's data to the Neon PostgreSQL database."""
     try:
         with conn.session as session:
-            # Insert into interviews table
             result = session.execute(
                 text("""
                 INSERT INTO interviews (candidate_name, interview_timestamp, total_score, job_description, resume_text)
                 VALUES (:candidate_name, :interview_timestamp, :total_score, :job_description, :resume_text)
                 RETURNING id;
-                """), # Wrap SQL with text()
+                """),
                 params={
                     "candidate_name": interview_data["candidate_name"],
                     "interview_timestamp": interview_data["timestamp"],
@@ -186,25 +175,23 @@ def save_interview_to_db(interview_data):
                     "resume_text": interview_data["verification_text"]
                 }
             )
-            interview_id = result.scalar_one() # Get the ID of the newly inserted interview
+            interview_id = result.scalar_one()
 
-            # Insert into qa_details table for each Q&A
             for qa_item in interview_data.get("qa", []):
-                # Fix for 'bytes' object has no attribute 'getvalue'
-                # st.session_state.audio_bytes is already bytes from mic_recorder
+                # Fix: audio_bytes is already bytes, no .getvalue() needed
                 audio_bytes_to_store = qa_item.get("audio_bytes") if qa_item.get("audio_bytes") else None
                 session.execute(
                     text("""
                     INSERT INTO qa_details (interview_id, question, answer, score, feedback, audio_bytes)
                     VALUES (:interview_id, :question, :answer, :score, :feedback, :audio_bytes)
-                    """), # Wrap SQL with text()
+                    """),
                     params={
                         "interview_id": interview_id,
                         "question": qa_item["question"],
                         "answer": qa_item["answer"],
                         "score": qa_item.get("score"),
                         "feedback": qa_item.get("feedback"),
-                        "audio_bytes": audio_bytes_to_store # Store as bytes
+                        "audio_bytes": audio_bytes_to_store
                     }
                 )
             session.commit()
@@ -219,27 +206,21 @@ def load_interviews_from_db():
     interviews = {}
     try:
         with conn.session as session:
-            # Fetch all main interview records
-            main_interviews_result = session.execute(text("SELECT * FROM interviews;")).fetchall() # Wrap SQL with text()
+            main_interviews_result = session.execute(text("SELECT * FROM interviews;")).fetchall()
             
             for row in main_interviews_result:
-                # Assuming the order of columns matches your CREATE TABLE statement
                 interview_dict = {
                     "id": row[0],
                     "candidate_name": row[1],
-                    # Format datetime object to string for consistency with session_state
                     "timestamp": row[2].strftime("%Y-%m-%d %H:%M:%S") if row[2] else None,
                     "total_score": row[3],
                     "jd": row[4],
                     "resume_text": row[5]
                 }
                 
-                # Fetch Q&A details for this interview using its ID
-                # Using f-string for interview_id in WHERE clause is generally safe if it's an integer
-                # For user-provided strings, always use parameterized queries to prevent SQL injection!
                 qa_details_result = session.execute(
                     text(f"SELECT question, answer, score, feedback, audio_bytes FROM qa_details WHERE interview_id = {interview_dict['id']};")
-                ).fetchall() # Wrap SQL with text()
+                ).fetchall()
                 
                 qa_list = []
                 for qa_row in qa_details_result:
@@ -248,21 +229,16 @@ def load_interviews_from_db():
                         "answer": qa_row[1],
                         "score": qa_row[2],
                         "feedback": qa_row[3],
-                        # Convert bytes from DB back to BytesIO for Streamlit audio playback
                         "audio_bytes": io.BytesIO(qa_row[4]) if qa_row[4] else None
                     }
                     qa_list.append(qa_dict)
                 
                 interview_dict["qa"] = qa_list
-                # Store the interview data using candidate name as key
                 interviews[interview_dict["candidate_name"]] = interview_dict
     except Exception as e:
         st.error(f"Error loading interview data from database: {str(e)}")
         logging.error(f"Database load error: {e}")
     return interviews
-
-# --- End of NEW database functions ---
-
 
 def format_transcript_for_download(interview_data):
     """Formats interview data into a human-readable transcript."""
@@ -306,13 +282,12 @@ def format_transcript_for_download(interview_data):
 async def generate_interview_questions(jd):
     """Generates interview questions based on the Job Description using Gemini API."""
     try:
-        # Use AsyncOpenAI client to connect to Google Gemini API
         provider = AsyncOpenAI(
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
             api_key=GEMINI_API_KEY
         )
         model = OpenAIChatCompletionsModel(model="gemini-1.5-flash", openai_client=provider)
-        set_tracing_disabled(disabled=True) # Disable tracing for cleaner logs
+        set_tracing_disabled(disabled=True)
 
         agent = Agent(
             name="Question Generator",
@@ -342,7 +317,6 @@ async def generate_interview_questions(jd):
             if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
                 full_response += event.data.delta
 
-        # Parse the JSON response
         response_json = json.loads(full_response.strip().strip('```json').strip('```'))
         return response_json["questions"]
     except json.JSONDecodeError:
@@ -393,7 +367,6 @@ async def conduct_interview(questions, resume_text):
         )
 
         qa_data = st.session_state.interview_data["qa"]
-        # Prepare input for the AI agent
         interview_input = "\n\n".join([f"Question {i+1}: {q['question']}\nAnswer: {q['answer']}" for i, q in enumerate(qa_data)])
 
         st.info("Analyzing responses and generating feedback...")
@@ -405,22 +378,16 @@ async def conduct_interview(questions, resume_text):
 
         response_json = json.loads(full_response.strip().strip('```json').strip('```'))
         
-        # Update scores and feedback in the session state's interview_data
         for i, qa in enumerate(st.session_state.interview_data["qa"]):
-            if i < len(response_json["questions"]): # Ensure index is within bounds
+            if i < len(response_json["questions"]):
                 ai_qa = response_json["questions"][i]
-                qa["score"] = int(ai_qa.get("score", 0)) # Ensure score is integer
+                qa["score"] = int(ai_qa.get("score", 0))
                 qa["feedback"] = ai_qa.get("feedback", "No feedback provided by AI.")
         
         st.session_state.interview_data["total_score"] = int(response_json.get("total_score", 0))
         
-        # --- CRITICAL CHANGE: Save to DB here instead of just session_state.interviews ---
         save_interview_to_db(st.session_state.interview_data)
-        # --- End Critical Change ---
-
         st.session_state.interview_processed_successfully = True
-        # After saving to DB, reload interviews from DB to ensure session state reflects new data
-        # This is crucial for the dashboard to show the latest interview without full app restart
         st.session_state.interviews = load_interviews_from_db()
 
     except json.JSONDecodeError:
@@ -447,28 +414,26 @@ def recruiter_login_logic():
             st.error("Incorrect password")
 
 # --------- Initialize session state -----------
-# This ensures that all necessary state variables are present from the start.
 for key, default_value in {
-    'current_page': "verification", # Controls which part of the app is shown
-    'interview_data': {},           # Stores data for the *current* interview being conducted
-    'shortlisted_df': None,         # DataFrame for shortlisted candidates
-    'interviews': {},               # Stores *all completed interviews* (loaded from DB)
-    'current_question_index': 0,    # Index for current interview question
-    'interview_started_processing': False, # Flag to prevent re-triggering AI evaluation
-    'interview_processed_successfully': False, # Flag for successful AI evaluation
-    'authenticated': False,         # Recruiter authentication status
-    'dynamic_questions': [],        # Questions generated by AI
-    'audio_question_played': False, # Flag to ensure question audio plays once
-    'audio_bytes': None,            # Stores raw audio bytes from mic
-    'transcribed_text': ""          # Stores transcribed text from mic
+    'current_page': "verification",
+    'interview_data': {},
+    'shortlisted_df': None,
+    'interviews': {},
+    'current_question_index': 0,
+    'interview_started_processing': False,
+    'interview_processed_successfully': False,
+    'authenticated': False,
+    'dynamic_questions': [],
+    'audio_question_played': False,
+    'audio_bytes': None,
+    'transcribed_text': "",
+    'timer_active': False,          # New: Is timer active?
+    'timer_start_time': None,       # New: When did timer start?
+    'answer_submitted_early': False # New: Did user submit before timeout?
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
 
-# --- Initial load of interviews from DB when app starts or refreshes ---
-# This ensures that 'interviews' in session state always reflects the database content.
-# It only loads if 'interviews' is not yet populated in session state
-# (e.g., on first app load or full refresh).
 if 'interviews' not in st.session_state or not st.session_state.interviews:
     logging.info("Loading interviews from database on app start.")
     st.session_state.interviews = load_interviews_from_db()
@@ -515,7 +480,6 @@ if st.session_state.current_page == "verification":
                     if verification_text.strip():
                         candidate_jd = candidate_row['Job Description'].iloc[0] if 'Job Description' in candidate_row.columns else ""
                         
-                        # Generate dynamic questions asynchronously
                         st.info("Generating questions based on JD. Please wait...")
                         st.session_state.dynamic_questions = asyncio.run(generate_interview_questions(candidate_jd))
                         
@@ -524,14 +488,17 @@ if st.session_state.current_page == "verification":
                             "candidate_name": full_name.strip(),
                             "jd": candidate_jd.strip(),
                             "verification_text": verification_text.strip(),
-                            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # Use datetime for current time
-                            "total_score": 0, # Initialize total score
-                            "qa": [] # Initialize Q&A list
+                            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "total_score": 0,
+                            "qa": []
                         }
                         st.session_state.current_question_index = 0
                         st.session_state.audio_question_played = False
                         st.session_state.interview_processed_successfully = False
-                        st.session_state.interview_started_processing = False # Reset for new interview
+                        st.session_state.interview_started_processing = False
+                        st.session_state.timer_active = False # Reset timer state for new interview
+                        st.session_state.timer_start_time = None # Reset timer start time
+                        st.session_state.answer_submitted_early = False # Reset flag
                         st.rerun()
                     else:
                         st.error("Could not extract text from the provided resume file. Please check the file.")
@@ -547,9 +514,6 @@ elif st.session_state.current_page == "interview":
         st.subheader("✅ Interview Completed")
         st.markdown(f"**Overall Score:** {st.session_state.interview_data['total_score']}/30")
         
-        # Display feedback from the database (via reloaded session state)
-        # Ensure we are looking at the current candidate's data from the loaded interviews
-        # It's better to fetch directly from the session_state.interviews which is reloaded from DB
         current_candidate_interview_data = st.session_state.interviews.get(candidate_name)
         if current_candidate_interview_data:
             for i, qa in enumerate(current_candidate_interview_data.get("qa", []), 1):
@@ -557,7 +521,6 @@ elif st.session_state.current_page == "interview":
                     st.write(f"**Q:** {qa['question']}")
                     st.write(f"**A:** {qa['answer']}")
                     if qa.get('audio_bytes'):
-                        # Ensure BytesIO object is at the beginning before playing
                         qa['audio_bytes'].seek(0)
                         st.audio(qa['audio_bytes'], format="audio/wav")
                     st.markdown(f"**Feedback:** {qa.get('feedback', 'No feedback provided.')}")
@@ -566,7 +529,6 @@ elif st.session_state.current_page == "interview":
 
         if st.button("Back to Start", key="back_to_start_after_interview"):
             st.session_state.current_page = "verification"
-            # Clear current interview data for the next candidate to prevent carry-over
             st.session_state.interview_data = {}
             st.session_state.current_question_index = 0
             st.session_state.interview_processed_successfully = False
@@ -575,6 +537,9 @@ elif st.session_state.current_page == "interview":
             st.session_state.audio_question_played = False
             st.session_state.audio_bytes = None
             st.session_state.transcribed_text = ""
+            st.session_state.timer_active = False # Reset timer state
+            st.session_state.timer_start_time = None # Reset timer start time
+            st.session_state.answer_submitted_early = False # Reset flag
             st.rerun()
 
     else:
@@ -582,7 +547,6 @@ elif st.session_state.current_page == "interview":
             current_question = st.session_state.dynamic_questions[st.session_state.current_question_index]
             st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.dynamic_questions)}")
             
-            # Play audio for the question only once
             if not st.session_state.audio_question_played:
                 audio_bytes_io = text_to_speech(current_question)
                 if audio_bytes_io:
@@ -593,44 +557,88 @@ elif st.session_state.current_page == "interview":
                 st.write(f"**{current_question}**")
             
             st.write("Record your answer:")
-            transcribed_text = record_audio() # This handles recording and transcription
+            transcribed_text = record_audio()
             
-            # Text area for manual input or editing transcribed text
-            answer = st.text_area(
+            answer_text_area = st.text_area(
                 "Or type your answer (This will override transcribed text if both are present):",
-                value=st.session_state.transcribed_text, # Initialize with transcribed text
+                value=st.session_state.transcribed_text,
+                height=150,
                 key=f"answer_manual_{st.session_state.current_question_index}"
             )
             
-            # If the user typed, that takes precedence; otherwise, use transcribed text
-            final_answer_to_submit = answer.strip() if answer.strip() else transcribed_text.strip()
+            submit_button_key = f"submit_answer_btn_{st.session_state.current_question_index}"
+            submit_button_clicked = st.button("Submit Answer", key=submit_button_key)
 
-            if st.button("Submit Answer", key=f"submit_answer_btn_{st.session_state.current_question_index}"):
-                if final_answer_to_submit:
-                    # st.session_state.audio_bytes is already bytes, no .getvalue() needed
-                    audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
+            # --- Timer Logic ---
+            timer_placeholder = st.empty()
+            MAX_TIME = 60 # 1 minute
+            
+            if not st.session_state.timer_active:
+                st.session_state.timer_active = True
+                st.session_state.timer_start_time = time.time()
+                st.session_state.answer_submitted_early = False # Reset for new question
 
-                    st.session_state.interview_data["qa"].append({
-                        "question": current_question,
-                        "answer": final_answer_to_submit,
-                        "audio_bytes": audio_for_save # Store raw bytes
-                    })
-                    # Reset audio and transcription state for the next question
-                    st.session_state.audio_bytes = None
-                    st.session_state.transcribed_text = ""
+            time_elapsed = time.time() - st.session_state.timer_start_time
+            remaining_time = MAX_TIME - int(time_elapsed)
 
-                    st.session_state.current_question_index += 1
-                    st.session_state.audio_question_played = False # Allow next question to play audio
-                    st.rerun() # Rerun the app to show the next question
-                else:
-                    st.warning("Please provide an answer either by speaking or typing.")
+            if remaining_time > 0 and not st.session_state.answer_submitted_early:
+                timer_placeholder.markdown(f"Time remaining: **{remaining_time} seconds** ⏰")
+                # Need to use time.sleep for the countdown to work in Streamlit's single-pass execution
+                time.sleep(1) 
+                # Re-run the app to update the timer
+                if not submit_button_clicked: # Only rerun if button not clicked yet
+                    st.rerun()
+            else:
+                st.session_state.timer_active = False # Timer finished
+                if not st.session_state.answer_submitted_early: # If timer ran out and not submitted
+                    timer_placeholder.error("Time's up! Moving to the next question.")
+                    submit_button_clicked = True # Force submission as timeout
+            # --- End Timer Logic ---
+
+            # Process submission (either by button click or timeout)
+            if submit_button_clicked:
+                final_answer_to_submit = answer_text_area.strip() if answer_text_area.strip() else transcribed_text.strip()
+
+                if not st.session_state.answer_submitted_early and remaining_time <= 0:
+                    # This means it's a timeout and the user didn't submit early
+                    final_answer_to_submit = "TIMEOUT: No answer submitted within 1 minute."
+                    st.session_state.audio_bytes = None # No audio for timeout
+                elif submit_button_clicked:
+                    # User clicked submit button
+                    st.session_state.answer_submitted_early = True # Mark as submitted early
+                    if not final_answer_to_submit:
+                        st.warning("Please provide an answer either by speaking or typing.")
+                        # Do not move to next question if answer is empty
+                        # Keep timer active by not rerunning or resetting timer flags
+                        st.session_state.timer_active = True # Keep timer active if no answer given
+                        st.session_state.answer_submitted_early = False # Reset to false if no answer
+                        # Important: return here to prevent moving forward without an answer
+                        return
+                
+                # If we reach here, an answer (or timeout) is ready to be saved
+                audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
+
+                st.session_state.interview_data["qa"].append({
+                    "question": current_question,
+                    "answer": final_answer_to_submit,
+                    "audio_bytes": audio_for_save
+                })
+                # Reset audio and transcription state for the next question
+                st.session_state.audio_bytes = None
+                st.session_state.transcribed_text = ""
+                st.session_state.timer_active = False # Reset timer for next question
+                st.session_state.timer_start_time = None # Reset timer start time
+                st.session_state.answer_submitted_early = False # Reset flag for next question
+
+                st.session_state.current_question_index += 1
+                st.session_state.audio_question_played = False
+                st.rerun()
 
         elif not st.session_state.interview_started_processing:
             st.info("All questions answered. Processing results and saving data. This may take a moment...")
-            st.session_state.interview_started_processing = True # Set flag to prevent re-processing
-            # The conduct_interview function will now save to DB and update session_state.interviews
+            st.session_state.interview_started_processing = True
             asyncio.run(conduct_interview(st.session_state.dynamic_questions, st.session_state.interview_data["verification_text"]))
-            st.rerun() # Rerun to show the "Interview Completed" section
+            st.rerun()
 
 elif st.session_state.current_page == "recruiter_login":
     recruiter_login_logic()
@@ -639,20 +647,16 @@ elif st.session_state.current_page == "recruiter_login":
         st.rerun()
 
 elif st.session_state.current_page == "recruiter_dashboard":
-    # Security check: if not authenticated, redirect to login
     if not st.session_state.authenticated:
         st.session_state.current_page = "recruiter_login"
         st.rerun()
     else:
         st.header("📊 Recruiter Dashboard")
         
-        # Ensure interviews are always reloaded fresh for the dashboard
-        # This makes sure the dashboard displays the most up-to-date information from the DB.
         st.session_state.interviews = load_interviews_from_db()
 
         if st.session_state.interviews:
             st.subheader("Completed Interviews")
-            # Sort interviews by timestamp, newest first
             sorted_interviews = sorted(
                 st.session_state.interviews.values(),
                 key=lambda x: datetime.datetime.strptime(x['timestamp'], "%Y-%m-%d %H:%M:%S") if isinstance(x['timestamp'], str) else x['timestamp'],
@@ -674,12 +678,16 @@ elif st.session_state.current_page == "recruiter_dashboard":
                             st.markdown(f"**Question {i+1}:** {qa_item.get('question', 'N/A')}")
                             st.markdown(f"**Candidate Answer:** {qa_item.get('answer', 'N/A')}")
                             if qa_item.get('audio_bytes'):
-                                # BytesIO object needs to be reset for playback in Streamlit's audio widget
-                                qa_item['audio_bytes'].seek(0)
-                                st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
+                                if isinstance(qa_item['audio_bytes'], io.BytesIO):
+                                    qa_item['audio_bytes'].seek(0) # For BytesIO objects
+                                    st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
+                                elif isinstance(qa_item['audio_bytes'], bytes):
+                                    st.audio(qa_item['audio_bytes'], format="audio/wav", start_time=0)
+                                else:
+                                    st.info("Audio format not recognized for playback.")
                             st.markdown(f"**Score:** {qa_item.get('score', 'N/A')}/10")
                             st.markdown(f"**Feedback:** {qa_item.get('feedback', 'No feedback provided.')}")
-                            st.markdown("---") # Separator for Q&A pairs
+                            st.markdown("---")
                     
                     st.download_button(
                         label="Download Transcript (TXT)",
