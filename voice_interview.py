@@ -1,40 +1,3 @@
-Okay, I understand. The persistent issues with audio cutting off, the page refreshing constantly, and previous page messages showing up are indeed frustrating. These are all related to how Streamlit re-runs the script and how your UI and state are being managed.
-
-The main problem is that Streamlit reruns the *entire script* from top to bottom on every interaction (like a button click, text input change, or even `time.sleep` followed by an implicit re-run). If not managed carefully, this leads to:
-
-1.  **Audio Interruptions:** When the script re-runs, the HTML audio component is re-rendered, which stops ongoing playback.
-2.  **UI Overlap:** Elements that aren't strictly confined to a specific page's `if` block will be redrawn, often on top of other elements, or persist when they shouldn't.
-3.  **Constant Refresh:** The `time.sleep(1)` combined with `st.rerun()` in your timer loop causes a deliberate, second-by-second re-run, leading to the "page refreshing again and again" observation.
-
-### The Core Fixes Implemented
-
-I've made critical adjustments to your code to address these, focusing on more explicit state management and Streamlit's execution model:
-
-1.  **Dedicated "Loading/Generating Questions" Page**:
-
-      * Instead of `st.info` messages appearing on the "verification" or "interview" page while questions are generated, I've introduced a new `current_page` state: `"generating_questions"`.
-      * When the "Start Interview" button is clicked, the app transitions to this loading page. The AI question generation happens *only* on this page. Once questions are generated, it transitions cleanly to the "interview" page. This prevents the "Generating questions..." messages from overlapping.
-
-2.  **Controlled Audio Playback and Timer Reruns**:
-
-      * The most significant change is in the `interview` page's audio and timer logic.
-      * When the question audio is first played (`if not st.session_state.audio_question_played:`), the script will now **not immediately call `st.rerun()`**. It will finish the current execution frame.
-      * The `st.rerun()` for the timer (`time.sleep(1); st.rerun()`) is now **only triggered if the audio has already played AND no submit button was clicked in the current run**. This prevents the timer's constant reruns from interrupting the initial audio playback.
-      * This allows the audio to fully stream and play in the browser before the timer takes over with its regular updates.
-
-3.  **Strict UI Page Segregation**:
-
-      * Ensured that **all** `st.` elements (headers, text inputs, buttons, messages like `st.info`, `st.warning`, `st.error`) are nested strictly within their respective `if st.session_state.current_page == "..."` blocks. This is crucial to prevent UI overlap.
-
-4.  **Clearer State Resets**:
-
-      * Refined the session state resets when moving between pages to ensure no lingering data causes unexpected behavior.
-
------
-
-Here is the **full, corrected code** with detailed comments explaining the changes:
-
-````python
 import streamlit as st
 import PyPDF2
 from docx import Document
@@ -828,5 +791,3 @@ elif st.session_state.current_page == "recruiter_dashboard":
             st.session_state.authenticated = False
             st.session_state.current_page = "verification"
             st.rerun()
-
-````
