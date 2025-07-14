@@ -112,8 +112,8 @@ def autoplay_audio(audio_bytes_io):
     Your browser does not support the audio element.
     </audio>
     """
-    # CORRECTED LINE: Call html directly on the placeholder
-    audio_player_placeholder.html(audio_html, height=50)
+    # CORRECTED LINE: Removed 'height' argument
+    audio_player_placeholder.html(audio_html)
 
 def text_to_speech(text_to_convert, lang='en'):
     """Converts text to speech and returns audio bytes."""
@@ -625,10 +625,9 @@ elif st.session_state.current_page == "interview":
                 st.session_state.audio_question_played = True 
             else:
                 st.write(f"**{current_question}**") 
-                # After the audio has played and the question text is displayed,
-                # you can clear the audio player placeholder if it's not needed
-                # to prevent it from lingering, though it won't re-play automatically.
-                # It will be emptied implicitly on the next st.rerun() when it's not explicitly drawn.
+                # Ensure the audio player placeholder is cleared if it's not actively playing
+                # on subsequent reruns for the same question.
+                audio_player_placeholder.empty()
 
             # --- Answer Input ---
             st.write("Record your answer:")
