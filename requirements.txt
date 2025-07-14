@@ -1,7 +1,10 @@
 streamlit
 streamlit-mic-recorder
+pydub speechrecognition
 gtts
-pydub
-SpeechRecognition
+python-docx
+PyPDF2
+pandas
+openai-agents
+nest_asyncio
 google-generativeai
-python-dotenv
