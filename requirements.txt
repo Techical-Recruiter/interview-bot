@@ -2,7 +2,6 @@ streamlit
 streamlit-mic-recorder
 gtts
 pygame
-pydub
 SpeechRecognition
 google-generativeai
 python-dotenv
