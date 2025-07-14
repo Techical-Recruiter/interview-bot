@@ -21,6 +21,7 @@ import speech_recognition as sr
 import tempfile
 from streamlit_mic_recorder import mic_recorder
 from sqlalchemy import text 
+from streamlit.components.v1 import html # <--- IMPORTANT: ADDED THIS IMPORT FOR HTML COMPONENTS
 
 # Configure logging (optional but good for debugging)
 import logging
@@ -111,8 +112,8 @@ def autoplay_audio(audio_bytes_io):
     Your browser does not support the audio element.
     </audio>
     """
-    # Use the global placeholder to render the audio player
-    audio_player_placeholder.components.v1.html(audio_html, height=50)
+    # CORRECTED LINE: Call html directly on the placeholder
+    audio_player_placeholder.html(audio_html, height=50)
 
 def text_to_speech(text_to_convert, lang='en'):
     """Converts text to speech and returns audio bytes."""
@@ -488,7 +489,7 @@ if st.session_state.current_page == "verification":
             candidate_row = st.session_state.shortlisted_df[st.session_state.shortlisted_df['Name'].str.strip().str.lower() == full_name.strip().lower()]
             
             if candidate_row.empty:
-                st.error(f"Candidate '{full_name}' not found in the shortlisted list.")
+                st.error(f"Candidate '{full_name}' not funad in the shortlisted list.")
             else:
                 if uploaded_file:
                     verification_text = extract_text_from_document(uploaded_file)
@@ -552,10 +553,6 @@ elif st.session_state.current_page == "generating_questions":
 
 # --- Interview Page ---
 elif st.session_state.current_page == "interview":
-    # Clear audio player placeholder if it's currently on the screen but not playing question
-    if not st.session_state.audio_question_played:
-        audio_player_placeholder.empty()
-
     candidate_name = st.session_state.interview_data.get("candidate_name", "Candidate")
     st.header(f"Interview: {candidate_name}")
     st.markdown("---")
@@ -565,6 +562,9 @@ elif st.session_state.current_page == "interview":
         st.session_state.error_message = None 
 
     if st.session_state.interview_processed_successfully:
+        # Clear audio player once interview is processed and results are displayed
+        audio_player_placeholder.empty()
+
         st.subheader("✅ Interview Completed")
         st.markdown(f"**Overall Score:** {st.session_state.interview_data['total_score']}/30")
         
@@ -615,6 +615,7 @@ elif st.session_state.current_page == "interview":
             st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.dynamic_questions)}")
             
             # --- Audio Playback Logic for Question ---
+            # This block plays the audio question ONLY ONCE per question.
             if not st.session_state.audio_question_played:
                 audio_bytes_io = text_to_speech(current_question)
                 if audio_bytes_io:
@@ -624,7 +625,10 @@ elif st.session_state.current_page == "interview":
                 st.session_state.audio_question_played = True 
             else:
                 st.write(f"**{current_question}**") 
-                # audio_player_placeholder.empty() # Not needed here, it's cleared on page transition or after playing
+                # After the audio has played and the question text is displayed,
+                # you can clear the audio player placeholder if it's not needed
+                # to prevent it from lingering, though it won't re-play automatically.
+                # It will be emptied implicitly on the next st.rerun() when it's not explicitly drawn.
 
             # --- Answer Input ---
             st.write("Record your answer:")
