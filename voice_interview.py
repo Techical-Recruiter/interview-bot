@@ -8,8 +8,8 @@ import tempfile
 import google.generativeai as genai
 from dotenv import load_dotenv
 import speech_recognition as sr
-import tempfile
 import uuid
+
 # Load Gemini API Key
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -18,11 +18,12 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 st.set_page_config(page_title="🎙 Voice Chatbot", layout="centered")
 st.title("🎙 Voice to Voice Chatbot using Gemini")
 
+# Save audio as .wav
 def save_audio_bytes_as_wav(audio_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         f.write(audio_bytes)
         return f.name
-        
+
 # Transcribe voice to text
 def speech_to_text(audio_path):
     recognizer = sr.Recognizer()
@@ -41,20 +42,18 @@ def chat_with_gemini(prompt):
     response = model.generate_content(prompt)
     return response.text
 
+# Speak bot reply
 def speak(text):
     tts = gTTS(text)
-    
-    # Save to a unique temp file
     filename = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mp3")
     tts.save(filename)
-    
+
     pygame.mixer.init()
     pygame.mixer.music.load(filename)
     pygame.mixer.music.play()
     while pygame.mixer.music.get_busy():
         continue
     pygame.mixer.quit()
-    
     os.remove(filename)
 
 # Mic recorder
@@ -71,4 +70,3 @@ if audio:
     st.success(f"🤖 Bot: {reply}")
 
     speak(reply)
-
