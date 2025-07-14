@@ -7,8 +7,8 @@ import pygame
 import tempfile
 import google.generativeai as genai
 from dotenv import load_dotenv
-from pydub import AudioSegment
 import speech_recognition as sr
+import tempfile
 import uuid
 # Load Gemini API Key
 load_dotenv()
@@ -18,13 +18,11 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 st.set_page_config(page_title="🎙 Voice Chatbot", layout="centered")
 st.title("🎙 Voice to Voice Chatbot using Gemini")
 
-# Convert raw audio to WAV
-def convert_to_wav(mp3_bytes):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as out_wav:
-        audio = AudioSegment.from_file(io.BytesIO(mp3_bytes))
-        audio.export(out_wav.name, format="wav")
-        return out_wav.name
-
+def save_audio_bytes_as_wav(audio_bytes):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+        f.write(audio_bytes)
+        return f.name
+        
 # Transcribe voice to text
 def speech_to_text(audio_path):
     recognizer = sr.Recognizer()
@@ -64,7 +62,7 @@ audio = mic_recorder(start_prompt="🎙️ Speak now", stop_prompt="🛑 Stop", 
 
 if audio:
     st.info("📝 Transcribing...")
-    audio_path = convert_to_wav(audio["bytes"])
+    audio_path = save_audio_bytes_as_wav(audio["bytes"])
     user_text = speech_to_text(audio_path)
     st.success(f"🗣 You said: {user_text}")
 
@@ -73,3 +71,4 @@ if audio:
     st.success(f"🤖 Bot: {reply}")
 
     speak(reply)
+
