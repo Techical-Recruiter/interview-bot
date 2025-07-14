@@ -44,7 +44,6 @@ def chat_with_gemini(prompt):
     response = model.generate_content(prompt)
     return response.text
 
-# Speak response using gTTS + pygame
 def speak(text):
     tts = gTTS(text)
     filename = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mp3")
@@ -57,6 +56,7 @@ def speak(text):
         continue
     pygame.mixer.quit()
     os.remove(filename)
+
 
 # Mic recorder
 audio = mic_recorder(start_prompt="🎙️ Speak now", stop_prompt="🛑 Stop", just_once=True, use_container_width=True)
