@@ -20,7 +20,7 @@ from pydub import AudioSegment
 import speech_recognition as sr
 import tempfile
 from streamlit_mic_recorder import mic_recorder
-from sqlalchemy import text # IMPORTANT: Added for SQL queries
+from sqlalchemy import text 
 
 # Configure logging (optional but good for debugging)
 import logging
@@ -98,6 +98,22 @@ def record_audio():
         key=f"transcribed_{st.session_state.current_question_index}"
     )
 
+# Placeholder for the audio player to control its presence
+audio_player_placeholder = st.empty() 
+
+def autoplay_audio(audio_bytes_io):
+    """Plays audio automatically using HTML."""
+    audio_bytes_io.seek(0) 
+    audio_base64 = base64.b64encode(audio_bytes_io.read()).decode('utf-8')
+    audio_html = f"""
+    <audio controls autoplay>
+    <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
+    Your browser does not support the audio element.
+    </audio>
+    """
+    # Use the global placeholder to render the audio player
+    audio_player_placeholder.components.v1.html(audio_html, height=50)
+
 def text_to_speech(text_to_convert, lang='en'):
     """Converts text to speech and returns audio bytes."""
     try:
@@ -111,17 +127,6 @@ def text_to_speech(text_to_convert, lang='en'):
         logging.error(f"TTS error: {e}")
         return None
     
-def autoplay_audio(audio_bytes_io):
-    """Plays audio automatically using HTML."""
-    audio_bytes_io.seek(0) 
-    audio_base64 = base64.b64encode(audio_bytes_io.read()).decode('utf-8')
-    audio_html = f"""
-    <audio controls autoplay>
-    <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
-    Your browser does not support the audio element.
-    </audio>
-    """
-    st.components.v1.html(audio_html, height=50)
 
 def extract_text_from_document(uploaded_file):
     """Extracts text from PDF, DOC, DOCX, or TXT files."""
@@ -314,7 +319,6 @@ async def generate_interview_questions(jd):
             model=model,
         )
 
-        # Do not use st.info here; it's handled by the calling page ("generating_questions")
         result = Runner.run_streamed(starting_agent=agent, input="Generate questions")
         full_response = ""
         async for event in result.stream_events():
@@ -325,8 +329,6 @@ async def generate_interview_questions(jd):
         return response_json["questions"]
     except json.JSONDecodeError:
         logging.error(f"JSON decode error during question generation: {full_response}")
-        # Provide a user-friendly message, but don't use st.error directly in an async function
-        # This will be handled by the caller or a subsequent rerender
         st.session_state.error_message = "Failed to parse questions from AI. Using default questions."
         return ["Tell me about yourself.", "Describe your experience.", "Why are you interested in this role?"]
     except Exception as e:
@@ -375,7 +377,6 @@ async def conduct_interview(questions, resume_text):
         qa_data = st.session_state.interview_data["qa"]
         interview_input = "\n\n".join([f"Question {i+1}: {q['question']}\nAnswer: {q['answer']}" for i, q in enumerate(qa_data)])
 
-        # Do not use st.info here; it's handled by the calling page (interview page when processing results)
         result = Runner.run_streamed(starting_agent=agent, input=interview_input)
         full_response = ""
         async for event in result.stream_events():
@@ -437,8 +438,8 @@ for key, default_value in {
     'timer_active': False,
     'timer_start_time': None,
     'answer_submitted_early': False,
-    'show_question_generation_status': False, # New: control display of generation status
-    'error_message': None # New: for displaying async errors cleanly
+    'show_question_generation_status': False,
+    'error_message': None 
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
@@ -455,6 +456,9 @@ st.markdown("---")
 # --- Page Routing Logic ---
 
 if st.session_state.current_page == "verification":
+    # Clear audio player placeholder when on this page
+    audio_player_placeholder.empty()
+
     st.header("📝 Candidate Verification")
     with st.expander("Candidate Information", expanded=True):
         full_name = st.text_input("Full Name", key="candidate_full_name")
@@ -491,13 +495,11 @@ if st.session_state.current_page == "verification":
                     if verification_text.strip():
                         candidate_jd = candidate_row['Job Description'].iloc[0] if 'Job Description' in candidate_row.columns else ""
                         
-                        # --- Transition to a "generating questions" state/page ---
                         st.session_state.current_page = "generating_questions"
-                        # Store necessary data for the next page
                         st.session_state.candidate_name_for_interview = full_name.strip()
                         st.session_state.candidate_jd_for_interview = candidate_jd.strip()
                         st.session_state.verification_text_for_interview = verification_text.strip()
-                        st.rerun() # Trigger rerun to go to the new page
+                        st.rerun() 
                     else:
                         st.error("Could not extract text from the provided resume file. Please check the file.")
                 else:
@@ -505,18 +507,18 @@ if st.session_state.current_page == "verification":
 
 # --- NEW PAGE: Generating Questions ---
 elif st.session_state.current_page == "generating_questions":
+    # Clear audio player placeholder when on this page
+    audio_player_placeholder.empty()
+
     st.header("Generating Interview Questions")
     st.info("Please wait while AI generates personalized interview questions based on the Job Description and Resume.")
     
-    # Run the async function to generate questions
     questions = asyncio.run(generate_interview_questions(
         st.session_state.candidate_jd_for_interview
     ))
     
-    # After questions are generated, prepare for interview page
     st.session_state.dynamic_questions = questions
     
-    # Initialize interview_data
     st.session_state.interview_data = {
         "candidate_name": st.session_state.candidate_name_for_interview,
         "jd": st.session_state.candidate_jd_for_interview,
@@ -526,7 +528,6 @@ elif st.session_state.current_page == "generating_questions":
         "qa": []
     }
 
-    # Reset/initialize other interview-related states
     st.session_state.current_question_index = 0
     st.session_state.audio_question_played = False
     st.session_state.interview_processed_successfully = False
@@ -535,37 +536,38 @@ elif st.session_state.current_page == "generating_questions":
     st.session_state.timer_start_time = None
     st.session_state.answer_submitted_early = False
     
-    # Clean up temporary state variables used for transition
-    del st.session_state.candidate_name_for_interview
-    del st.session_state.candidate_jd_for_interview
-    del st.session_state.verification_text_for_interview
+    if 'candidate_name_for_interview' in st.session_state:
+        del st.session_state.candidate_name_for_interview
+    if 'candidate_jd_for_interview' in st.session_state:
+        del st.session_state.candidate_jd_for_interview
+    if 'verification_text_for_interview' in st.session_state:
+        del st.session_state.verification_text_for_interview
     
-    # Display any error message from question generation before proceeding
     if st.session_state.error_message:
         st.error(st.session_state.error_message)
-        st.session_state.error_message = None # Clear after display
+        st.session_state.error_message = None 
 
-    # Transition to the interview page
     st.session_state.current_page = "interview"
-    st.rerun() # Trigger rerun to go to the interview page
+    st.rerun() 
 
 # --- Interview Page ---
 elif st.session_state.current_page == "interview":
+    # Clear audio player placeholder if it's currently on the screen but not playing question
+    if not st.session_state.audio_question_played:
+        audio_player_placeholder.empty()
+
     candidate_name = st.session_state.interview_data.get("candidate_name", "Candidate")
     st.header(f"Interview: {candidate_name}")
     st.markdown("---")
 
-    # Display any error message that might have occurred during question generation
     if st.session_state.error_message:
         st.error(st.session_state.error_message)
-        st.session_state.error_message = None # Clear after display
+        st.session_state.error_message = None 
 
     if st.session_state.interview_processed_successfully:
         st.subheader("✅ Interview Completed")
         st.markdown(f"**Overall Score:** {st.session_state.interview_data['total_score']}/30")
         
-        # Load the interview data again specifically for display, using ID for uniqueness
-        # This prevents issues if candidate name isn't unique in session_state.interviews
         interview_id_to_display = None
         for interview_id, interview_data_val in st.session_state.interviews.items():
             if interview_data_val["candidate_name"] == candidate_name and \
@@ -583,9 +585,9 @@ elif st.session_state.current_page == "interview":
                     if qa.get('audio_bytes'):
                         if isinstance(qa['audio_bytes'], io.BytesIO):
                             qa['audio_bytes'].seek(0)
-                            st.audio(qa['audio_bytes'], format="audio/wav")
+                            st.audio(qa['audio_bytes'], format="audio/wav", start_time=0)
                         elif isinstance(qa['audio_bytes'], bytes):
-                            st.audio(qa['audio_bytes'], format="audio/wav")
+                            st.audio(qa['audio_bytes'], format="audio/wav", start_time=0)
                         else:
                             st.info("Audio format not recognized for playback.")
                     st.markdown(f"**Feedback:** {qa.get('feedback', 'No feedback provided.')}")
@@ -593,7 +595,6 @@ elif st.session_state.current_page == "interview":
             st.warning("Could not retrieve detailed interview results from database. Please check dashboard.")
 
         if st.button("Back to Start", key="back_to_start_after_interview"):
-            # Reset all interview related states
             st.session_state.current_page = "verification"
             st.session_state.interview_data = {}
             st.session_state.current_question_index = 0
@@ -614,26 +615,20 @@ elif st.session_state.current_page == "interview":
             st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.dynamic_questions)}")
             
             # --- Audio Playback Logic for Question ---
-            # This block plays the audio question ONLY ONCE per question.
             if not st.session_state.audio_question_played:
                 audio_bytes_io = text_to_speech(current_question)
                 if audio_bytes_io:
                     st.write(f"**{current_question}**")
-                    autoplay_audio(audio_bytes_io)
-                    # IMPORTANT: Do NOT call st.rerun() immediately here.
-                    # Let the current script execution finish.
-                    # The timer's st.rerun() will kick in on the next script run.
-                st.session_state.audio_question_played = True # Mark as played
-                # Add a small, non-blocking sleep if audio consistently cuts out too fast,
-                # to give the browser a moment to start playing the HTML audio.
-                # This is less ideal than browser full buffering, but can help.
-                # time.sleep(0.5) 
+                    autoplay_audio(audio_bytes_io) 
+                    time.sleep(1.5) # Increased sleep to ensure audio playback starts reliably
+                st.session_state.audio_question_played = True 
             else:
-                st.write(f"**{current_question}**") # Display text if audio already played
-            
+                st.write(f"**{current_question}**") 
+                # audio_player_placeholder.empty() # Not needed here, it's cleared on page transition or after playing
+
             # --- Answer Input ---
             st.write("Record your answer:")
-            transcribed_text = record_audio() # This is a blocking call until audio is recorded
+            transcribed_text = record_audio() 
             
             answer_text_area = st.text_area(
                 "Or type your answer (This will override transcribed text if both are present):",
@@ -649,7 +644,6 @@ elif st.session_state.current_page == "interview":
             timer_placeholder = st.empty()
             MAX_TIME = 60 # 1 minute
             
-            # Initialize timer if not active for the current question
             if not st.session_state.timer_active:
                 st.session_state.timer_active = True
                 st.session_state.timer_start_time = time.time()
@@ -658,43 +652,36 @@ elif st.session_state.current_page == "interview":
             time_elapsed = time.time() - st.session_state.timer_start_time
             remaining_time = MAX_TIME - int(time_elapsed)
 
-            # Display timer and trigger reruns
             if remaining_time > 0 and not st.session_state.answer_submitted_early:
                 timer_placeholder.markdown(f"Time remaining: **{remaining_time} seconds** ⏰")
-                # Only rerun for timer if the submit button wasn't pressed
-                # and the audio has had a chance to play (or was already played).
                 if not submit_button_clicked: 
-                    time.sleep(1) # Pause for 1 second before next refresh
-                    st.rerun() # Trigger a refresh to update timer
+                    time.sleep(1) 
+                    st.rerun() 
             else:
-                st.session_state.timer_active = False # Timer finished
-                if not st.session_state.answer_submitted_early: # If timer ran out and user didn't submit
+                st.session_state.timer_active = False 
+                if not st.session_state.answer_submitted_early: 
                     timer_placeholder.error("Time's up! Moving to the next question.")
-                    submit_button_clicked = True # Force submission as timeout
-            # --- End Timer Logic ---
+                    submit_button_clicked = True 
 
             # Process submission (either by button click or timeout)
             if submit_button_clicked:
                 final_answer_to_submit = answer_text_area.strip() if answer_text_area.strip() else transcribed_text.strip()
 
                 if not st.session_state.answer_submitted_early and remaining_time <= 0:
-                    # This means it's a timeout and the user didn't submit early
                     final_answer_to_submit = "TIMEOUT: No answer submitted within 1 minute."
-                    st.session_state.audio_bytes = None # No audio for timeout
-                elif submit_button_clicked: # User explicitly clicked submit button
-                    st.session_state.answer_submitted_early = True # Mark as submitted early
-                    if not final_answer_to_submit: # If answer is empty after submitting
+                    st.session_state.audio_bytes = None 
+                elif submit_button_clicked: 
+                    st.session_state.answer_submitted_early = True 
+                    if not final_answer_to_submit: 
                         st.warning("Please provide an answer either by speaking or typing.")
-                        # Reset for another attempt on the same question
                         st.session_state.timer_active = True 
-                        st.session_state.timer_start_time = time.time() # Reset timer
+                        st.session_state.timer_start_time = time.time() 
                         st.session_state.answer_submitted_early = False 
-                        st.rerun() # Rerun to display warning and restart timer on the SAME question
+                        st.rerun() 
                 
-                # If we reach here, a valid answer (or timeout string) is ready for processing
                 if final_answer_to_submit: 
                     audio_for_save = st.session_state.audio_bytes if st.session_state.audio_bytes else None
-                    if final_answer_to_submit.startswith("TIMEOUT:"): # For timeout, ensure no audio
+                    if final_answer_to_submit.startswith("TIMEOUT:"): 
                         audio_for_save = None
 
                     st.session_state.interview_data["qa"].append({
@@ -702,7 +689,6 @@ elif st.session_state.current_page == "interview":
                         "answer": final_answer_to_submit,
                         "audio_bytes": audio_for_save
                     })
-                    # Reset states for the next question
                     st.session_state.audio_bytes = None
                     st.session_state.transcribed_text = ""
                     st.session_state.timer_active = False 
@@ -710,23 +696,23 @@ elif st.session_state.current_page == "interview":
                     st.session_state.answer_submitted_early = False 
 
                     st.session_state.current_question_index += 1
-                    st.session_state.audio_question_played = False # Reset for the next question's audio
-                    st.rerun() # Move to the next question or final processing
+                    st.session_state.audio_question_played = False 
+                    st.rerun() 
 
-        # After all questions are answered, initiate final processing
         elif not st.session_state.interview_started_processing:
             st.info("All questions answered. Processing results and saving data. This may take a moment...")
             st.session_state.interview_started_processing = True
             asyncio.run(conduct_interview(st.session_state.dynamic_questions, st.session_state.interview_data["verification_text"]))
             
-            # Display any error message from evaluation
             if st.session_state.error_message:
                 st.error(st.session_state.error_message)
-                st.session_state.error_message = None # Clear after display
-            st.rerun() # Rerun to display the completed interview page
+                st.session_state.error_message = None 
+            st.rerun() 
 
 # --- Recruiter Login Page ---
 elif st.session_state.current_page == "recruiter_login":
+    # Clear audio player placeholder when on this page
+    audio_player_placeholder.empty()
     recruiter_login_logic()
     if st.button("Back to Candidate Verification", key="back_to_candidate_verification_from_login"):
         st.session_state.current_page = "verification"
@@ -734,18 +720,19 @@ elif st.session_state.current_page == "recruiter_login":
 
 # --- Recruiter Dashboard Page ---
 elif st.session_state.current_page == "recruiter_dashboard":
+    # Clear audio player placeholder when on this page
+    audio_player_placeholder.empty()
+
     if not st.session_state.authenticated:
         st.session_state.current_page = "recruiter_login"
         st.rerun()
     else:
         st.header("📊 Recruiter Dashboard")
         
-        # Always reload interviews from DB when accessing the dashboard to get the latest data
         st.session_state.interviews = load_interviews_from_db()
 
         if st.session_state.interviews:
             st.subheader("Completed Interviews")
-            # Sort interviews by timestamp
             sorted_interviews = sorted(
                 st.session_state.interviews.values(),
                 key=lambda x: datetime.datetime.strptime(x['timestamp'], "%Y-%m-%d %H:%M:%S") if isinstance(x['timestamp'], str) else x['timestamp'],
